@@ -21,7 +21,9 @@ public static class ConfigSerializer
         if (string.IsNullOrWhiteSpace(json)) return new ClassifierConfig();
         try
         {
-            return JsonSerializer.Deserialize<ClassifierConfig>(json, Options) ?? new ClassifierConfig();
+            var config = JsonSerializer.Deserialize<ClassifierConfig>(json, Options) ?? new ClassifierConfig();
+            config.Overrides = new Dictionary<string, Category>(config.Overrides, StringComparer.OrdinalIgnoreCase);
+            return config;
         }
         catch (JsonException)
         {

@@ -67,4 +67,19 @@ public class ConfigSerializerTests
         Assert.NotNull(config);
         Assert.Empty(config.Rules);
     }
+
+    [Fact]
+    public void Deserialize_PreservesCaseInsensitiveOverrides()
+    {
+        var config = new ClassifierConfig
+        {
+            Overrides = { ["REPORT.PDF"] = Category.Dev }
+        };
+
+        var json = ConfigSerializer.Serialize(config);
+        var back = ConfigSerializer.Deserialize(json);
+
+        Assert.True(back.Overrides.ContainsKey("report.pdf"));
+        Assert.Equal(Category.Dev, back.Overrides["report.pdf"]);
+    }
 }
