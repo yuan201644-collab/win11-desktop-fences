@@ -22,7 +22,9 @@ public static class ConfigSerializer
         try
         {
             var config = JsonSerializer.Deserialize<ClassifierConfig>(json, Options) ?? new ClassifierConfig();
-            config.Overrides = new Dictionary<string, Category>(config.Overrides, StringComparer.OrdinalIgnoreCase);
+            config.Overrides = config.Overrides is null
+                ? new Dictionary<string, Category>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, Category>(config.Overrides, StringComparer.OrdinalIgnoreCase);
             return config;
         }
         catch (JsonException)

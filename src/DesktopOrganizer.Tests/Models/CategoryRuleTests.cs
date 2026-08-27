@@ -84,4 +84,18 @@ public class CategoryRuleTests
         };
         Assert.False(rule.Matches(Icon("x.lnk", @"C:\d\x.lnk", null)));
     }
+
+    [Theory]
+    [InlineData(RuleField.NameKeyword, RuleOp.StartsWith, "quarterly", "quarterly-report.pdf", true)]
+    [InlineData(RuleField.NameKeyword, RuleOp.StartsWith, "annual", "quarterly-report.pdf", false)]
+    [InlineData(RuleField.NameKeyword, RuleOp.StartsWith, "QUARTERLY", "quarterly-report.pdf", true)] // case-insensitive
+    [InlineData(RuleField.NameKeyword, RuleOp.Matches, @"\d{4}-report", "2026-report.pdf", true)]
+    [InlineData(RuleField.NameKeyword, RuleOp.Matches, @"\d{4}-report", "summary.pdf", false)]
+    [InlineData(RuleField.NameKeyword, RuleOp.Matches, @"\d{4}-REPORT", "2026-report.pdf", true)] // regex IgnoreCase
+    public void Predicate_StartsWithAndMatches_Ops(RuleField field, RuleOp op, string value, string name, bool expected)
+    {
+        var pred = new RulePredicate(field, op, value);
+        var icon = Icon(name, $@"C:\d\{name}", null);
+        Assert.Equal(expected, pred.Matches(icon.Name));
+    }
 }

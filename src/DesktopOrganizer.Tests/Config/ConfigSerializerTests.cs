@@ -82,4 +82,17 @@ public class ConfigSerializerTests
         Assert.True(back.Overrides.ContainsKey("report.pdf"));
         Assert.Equal(Category.Dev, back.Overrides["report.pdf"]);
     }
+
+    [Fact]
+    public void Deserialize_NullOverrides_ReturnsEmptyCaseInsensitiveDict()
+    {
+        var json = """{"version":"1","rules":[],"overrides":null}""";
+        var config = ConfigSerializer.Deserialize(json);
+        Assert.NotNull(config);
+        Assert.NotNull(config.Overrides);
+        Assert.Empty(config.Overrides);
+        // Case-insensitive: adding with mixed case should be retrievable with lower case.
+        config.Overrides["Test.Key"] = Category.Dev;
+        Assert.True(config.Overrides.ContainsKey("test.key"));
+    }
 }

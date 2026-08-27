@@ -85,4 +85,37 @@ public class ClassifierEngineTests
         var config = new ClassifierConfig();
         Assert.Equal(Category.Other, _engine.Classify(Icon("mystery.xyz", @"C:\d\mystery.xyz"), config));
     }
+
+    [Fact]
+    public void KeywordFallback_IsDeterministic_OrdinalOrder()
+    {
+        // "backup-installer.xyz" matches both "backup" (Archives) and "installer" (Downloads).
+        // Ordinal (case-insensitive) keyword ordering picks "backup" before "installer",
+        // so the result must be Archives — and must be stable across repeated calls.
+        var config = new ClassifierConfig();
+        var icon = Icon("backup-installer.xyz", @"C:\d\backup-installer.xyz");
+        var first = _engine.Classify(icon, config);
+        var second = _engine.Classify(icon, config);
+        Assert.Equal(first, second);
+        Assert.Equal(Category.Archives, first);
+    }
+
+    [Fact]
+    public void CustomRule_BeatsLinkTarget()
+    {
+        // Link target "chrome.exe" would classify as Browser, but a custom rule
+        // matching the name wins (precedence level 2 > level 3).
+        var config = new ClassifierConfig
+        {
+            Rules =
+            {
+                new CategoryRule
+                {
+                    Category = Category.Dev,
+                    Predicates = { new RulePredicate(RuleField.NameKeyword, RuleOp.Contains, "work") }
+                }
+            }
+        };
+        Assert.Equal(Category.Dev, _engine.Classify(Icon("work-shortcut.lnk", @"C:\d\work-shortcut.lnk", "chrome.exe"), config));
+    }
 }

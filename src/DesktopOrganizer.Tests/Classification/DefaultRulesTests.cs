@@ -33,12 +33,20 @@ public class DefaultRulesTests
     [InlineData("screenshot_001.png", Category.Images)]
     [InlineData("桌面截图.png", Category.Images)]
     [InlineData("project-backup.zip", Category.Archives)]
-    [InlineData("unrelated.txt", Category.Other)]
     public void KeywordCategories_MatchByNameContains(string name, Category expected)
     {
         var hit = DefaultRules.KeywordCategories
             .FirstOrDefault(kv => name.Contains(kv.Key, StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(hit.Key);
         Assert.Equal(expected, hit.Value);
+    }
+
+    [Fact]
+    public void KeywordCategories_NoMatch_ReturnsDefaultKey()
+    {
+        var hit = DefaultRules.KeywordCategories
+            .FirstOrDefault(kv => "unrelated.txt".Contains(kv.Key, StringComparison.OrdinalIgnoreCase));
+        Assert.Null(hit.Key);
     }
 
     [Fact]

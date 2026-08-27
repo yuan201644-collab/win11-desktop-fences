@@ -23,7 +23,8 @@ public sealed class ClassifierEngine
         if (DefaultRules.ExtensionCategories.TryGetValue(ext, out var byExt))
             return byExt;
 
-        foreach (var (keyword, category) in DefaultRules.KeywordCategories)
+        foreach (var (keyword, category) in DefaultRules.KeywordCategories
+                     .OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
             if (icon.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase))
                 return category;
 
