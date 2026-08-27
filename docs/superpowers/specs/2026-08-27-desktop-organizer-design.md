@@ -131,7 +131,7 @@ collapse/expand, add/remove icons, recompute grid.
 enum Category { Other, Images, Documents, Videos, Audio, Archives,
                 Applications, Browser, Office, Dev, Games, Downloads, ... }
 
-sealed record IconEntry { string Name; string Path; string? LnkTarget; Category Category; int Index; }
+sealed record IconEntry(int Index, string Name, string Path, string? LinkTargetApp, Category Category = Category.Other);
 
 sealed record Fence { string Id; string Title; Category Category;
                       string MonitorId; RectI Rect; bool Collapsed;
@@ -140,13 +140,14 @@ sealed record Fence { string Id; string Title; Category Category;
 
 sealed record RectI(int X, int Y, int Width, int Height);
 
-sealed record CategoryRule { string Id; Category? Category;
-                             bool MatchOrIfAny; List<RulePredicate> Predicates; }
-sealed record RulePredicate { RuleField Field; RuleOp Op; string Value; }
+sealed class CategoryRule { string Id; Category? Category;
+                             bool MatchAny; List<RulePredicate> Predicates; }
+sealed record RulePredicate(RuleField Field, RuleOp Op, string Value);
 enum RuleField { NameKeyword, Extension, LinkTargetApp }
 enum RuleOp { Equals, Contains, StartsWith, Matches (regex) }
 
-sealed record ClassifierConfig { List<CategoryRule> Rules; Dictionary<string,Category> Overrides; }
+sealed class ClassifierConfig { string Version; List<CategoryRule> Rules; Dictionary<string,Category> Overrides;
+                                // Overrides uses StringComparer.OrdinalIgnoreCase (preserved by ConfigSerializer on load) }
 
 sealed record AppSettings { FenceLayout? Layout; ClassifierConfig Classifier; bool AutoStart; bool LiveSort; }
 ```
