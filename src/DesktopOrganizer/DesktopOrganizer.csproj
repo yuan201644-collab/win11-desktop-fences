@@ -12,4 +12,8 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="DesktopOrganizer.Tests" />
+  </ItemGroup>
+
 </Project>
