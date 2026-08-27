@@ -86,7 +86,7 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
             throw new DesktopAutoArrangeException(
                 "Desktop has 'Auto arrange' ON — positions are ignored. Turn it off (right-click desktop → View → uncheck Auto arrange) and retry.");
         var lp = (IntPtr)((position.Y << 16) | (position.X & 0xFFFF));
-        NativeMethods.SendMessageTimeout(_hwnd, NativeMethods.LVM_SETITEMPOSITION, (IntPtr)index, lp,
+        NativeMethods.SendMessageTimeout(_hwnd, NativeMethods.LVM_SETITEMPOSITION32, (IntPtr)index, lp,
             NativeMethods.SMTO_ABORTIFHUNG, 2000, out _);
     }
 

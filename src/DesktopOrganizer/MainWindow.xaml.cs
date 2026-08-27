@@ -34,11 +34,16 @@ public partial class MainWindow : Window
             using var provider = new SysListView32Provider();
             var service = new DesktopLayoutService(provider, new ClassifierEngine(), new ClassifierConfig());
             var report = service.ArrangeIntoFence(new RectI(0, 0, 800, 600), 4);
-            MessageBox.Show($"Arranged {report.Count} desktop icons into a 4-column grid.", "M2 PoC", MessageBoxButton.OK);
+            var detail = $"IsAvailable={provider.IsAvailable}, desktop icons={provider.Count}, arranged={report.Count}.";
+            MessageBox.Show($"Arranged {report.Count} desktop icons into a 4-column grid.\n{detail}", "M2 PoC", MessageBoxButton.OK);
         }
         catch (DesktopAutoArrangeException ex)
         {
             MessageBox.Show(ex.Message, "Cannot arrange (M2 PoC)", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"M2 PoC failed: {ex.GetType().Name}: {ex.Message}", "Cannot arrange (M2 PoC)", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 }

@@ -76,7 +76,8 @@ internal static class NativeMethods
     internal const uint LVM_FIRST = 0x1000;
     internal const uint LVM_GETITEMCOUNT = LVM_FIRST + 4;
     internal const uint LVM_GETITEMPOSITION = LVM_FIRST + 16;   // 0x1010
-    internal const uint LVM_SETITEMPOSITION = LVM_FIRST + 15;   // 0x100F
+    internal const uint LVM_SETITEMPOSITION = LVM_FIRST + 15;   // 0x100F  lParam = POINT*
+    internal const uint LVM_SETITEMPOSITION32 = LVM_FIRST + 0x3E; // 0x103E  lParam = MAKELONG(x,y)
     internal const uint LVM_GETITEMTEXTW = LVM_FIRST + 115;     // 0x1073
     internal const uint LVM_GETITEMW = LVM_FIRST + 75;          // 0x104B
     internal const uint LVM_GETITEMSPACING = LVM_FIRST + 51;    // 0x1033
