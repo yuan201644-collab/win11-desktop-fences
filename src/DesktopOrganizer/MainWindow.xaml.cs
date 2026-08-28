@@ -67,10 +67,9 @@ public partial class MainWindow : Window
 
             var count = provider.Count;
             var maxRows = Math.Max(1, (int)(pY / (double)provider.IconSpacingY));
-            var columns = Math.Max(1, (int)Math.Ceiling(count / (double)maxRows));
-            Log($"layout: count={count}, spacing=({provider.IconSpacingX},{provider.IconSpacingY}), maxRows={maxRows}, columns={columns}");
+            Log($"layout: count={count}, spacing=({provider.IconSpacingX},{provider.IconSpacingY}), maxRows={maxRows}");
 
-            var report = service.ArrangeIntoFence(new RectI(0, 0, pX, pY), columns);
+            var report = service.ArrangeIntoFence(new RectI(0, 0, pX, pY), maxRows);
 
             // Detailed diagnostics: each icon's resolved info + where it was sent
             foreach (var (icon, cat, tgt) in report)

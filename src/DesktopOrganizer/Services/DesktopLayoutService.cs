@@ -19,7 +19,7 @@ public sealed class DesktopLayoutService
         _config = config;
     }
 
-    public IReadOnlyList<(DesktopIcon Icon, Category Category, PointI Target)> ArrangeIntoFence(RectI fence, int columns)
+    public IReadOnlyList<(DesktopIcon Icon, Category Category, PointI Target)> ArrangeIntoFence(RectI fence, int maxRows)
     {
         if (!_provider.IsAvailable) return new List<(DesktopIcon, Category, PointI)>();
         var icons = _provider.GetIcons();
@@ -41,14 +41,34 @@ public sealed class DesktopLayoutService
 
         var cellW = _provider.IconSpacingX;
         var cellH = _provider.IconSpacingY;
-        var cols = Math.Max(1, columns);
         // Extra rows to insert between category boundaries for visual separation.
         const int CategoryGapRows = 1;
+
+        // --- Calculate columns so the grid fits within the visible desktop area ---
+        var maxCols = Math.Max(1, fence.Width / cellW);       // horizontal limit
+        var categoryCount = ordered.Select(x => x.Category).Distinct().Count();
+
+        // Start with full gaps; reduce if they'd consume all available rows.
+        var gapRows = Math.Max(0, categoryCount - 1) * CategoryGapRows;
+        var effectiveMaxRows = maxRows - gapRows;
+        int cols;
+        if (effectiveMaxRows < 2)
+        {
+            // Not enough room for gaps — sacrifice them to fit icons in grid.
+            gapRows = 0;
+            effectiveMaxRows = maxRows;
+            cols = Math.Max(1, Math.Min(maxCols, (int)Math.Ceiling((double)ordered.Count / effectiveMaxRows)));
+        }
+        else
+        {
+            cols = Math.Max(1, Math.Min(maxCols, (int)Math.Ceiling((double)ordered.Count / effectiveMaxRows)));
+        }
 
         var targets = new List<PointI>(ordered.Count);
         var row = 0;
         var col = 0;
         var prevCat = ordered[0].Category;
+        var actualGapRows = gapRows > 0 ? CategoryGapRows : 0; // 0 when we sacrificed gaps
 
         for (var i = 0; i < ordered.Count; i++)
         {
@@ -58,7 +78,7 @@ public sealed class DesktopLayoutService
                 // Start each category on a fresh row, with blank gap row(s) above it,
                 // so groups appear as visually distinct clusters on the desktop.
                 if (col != 0) row++;          // finish the current partial row first
-                row += CategoryGapRows;       // leave blank row(s) as the visual separator
+                row += actualGapRows;          // leave blank row(s) as the visual separator
                 col = 0;
                 prevCat = cat;
             }
