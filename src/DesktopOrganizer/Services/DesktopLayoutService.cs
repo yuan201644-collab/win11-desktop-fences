@@ -39,7 +39,36 @@ public sealed class DesktopLayoutService
             .ThenBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var targets = GridLayoutCalculator.Compute(fence, ordered.Count, columns, _provider.IconSpacingX, _provider.IconSpacingY);
+        var cellW = _provider.IconSpacingX;
+        var cellH = _provider.IconSpacingY;
+        var cols = Math.Max(1, columns);
+        // Extra rows to insert between category boundaries for visual separation.
+        const int CategoryGapRows = 1;
+
+        var targets = new List<PointI>(ordered.Count);
+        var row = 0;
+        var col = 0;
+        var prevCat = ordered[0].Category;
+
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var cat = ordered[i].Category;
+            if (i > 0 && cat != prevCat)
+            {
+                // Start each category on a fresh row, with blank gap row(s) above it,
+                // so groups appear as visually distinct clusters on the desktop.
+                if (col != 0) row++;          // finish the current partial row first
+                row += CategoryGapRows;       // leave blank row(s) as the visual separator
+                col = 0;
+                prevCat = cat;
+            }
+            targets.Add(new PointI(
+                fence.X + col * cellW,
+                fence.Y + row * cellH));
+            col++;
+            if (col >= cols) { col = 0; row++; }
+        }
+
         var report = new List<(DesktopIcon, Category, PointI)>();
         for (var i = 0; i < ordered.Count && i < targets.Count; i++)
         {
