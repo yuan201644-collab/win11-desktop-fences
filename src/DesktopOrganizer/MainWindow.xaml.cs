@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -29,21 +30,65 @@ public partial class MainWindow : Window
     // M2 PoC debug button — remove in M6
     private void ArrangeDebugButton_Click(object sender, RoutedEventArgs e)
     {
+        var logPath = AppContext.BaseDirectory + "m2-poc.log";
+        void Log(string line)
+        {
+            try { File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} {line}\r\n"); } catch (IOException) { /* best-effort */ }
+        }
+
+        Log("=== click ===");
         try
         {
             using var provider = new SysListView32Provider();
-            var service = new DesktopLayoutService(provider, new ClassifierEngine(), new ClassifierConfig());
-            var report = service.ArrangeIntoFence(new RectI(0, 0, 800, 600), 4);
-            var detail = $"IsAvailable={provider.IsAvailable}, desktop icons={provider.Count}, arranged={report.Count}.";
-            MessageBox.Show($"Arranged {report.Count} desktop icons into a 4-column grid.\n{detail}", "M2 PoC", MessageBoxButton.OK);
+            Log($"ctor ok: IsAvailable={provider.IsAvailable}, Handle=0x{provider.Handle.ToInt64():X}, Count={provider.Count}, Spacing=({provider.IconSpacingX},{provider.IconSpacingY})");
+            var style = NativeMethods.GetWindowLong(provider.Handle, NativeMethods.GWL_STYLE);
+            Log($"GWL_STYLE=0x{style:X8}, AUTOARRANGE_bit={(style & NativeMethods.LVS_AUTOARRANGE) != 0}");
+            NativeMethods.GetWindowRect(provider.Handle, out var lv);
+            Log($"ListView rect: L={lv.Left},T={lv.Top},R={lv.Right},B={lv.Bottom} (W={lv.Right - lv.Left},H={lv.Bottom - lv.Top})");
+            var pX = NativeMethods.GetSystemMetrics(0); var pY = NativeMethods.GetSystemMetrics(1);
+            var vL = NativeMethods.GetSystemMetrics(76); var vT = NativeMethods.GetSystemMetrics(77);
+            var vW = NativeMethods.GetSystemMetrics(78); var vH = NativeMethods.GetSystemMetrics(79);
+            Log($"Screen: primary={pX}x{pY}, virtual=({vL},{vT})-({vL + vW},{vT + vH})");
+            if (!provider.IsAvailable)
+            {
+                Log("NOT AVAILABLE - desktop SysListView32 not found");
+                MessageBox.Show("IsAvailable=False：未找到桌面 SysListView32 窗口。\n日志: " + logPath, "M2 PoC", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var engine = new ClassifierEngine();
+            var config = new ClassifierConfig();
+            var service = new DesktopLayoutService(provider, engine, config);
+
+            var count = provider.Count;
+            var maxRows = Math.Max(1, (int)(pY / (double)provider.IconSpacingY));
+            var columns = Math.Max(1, (int)Math.Ceiling(count / (double)maxRows));
+            Log($"layout: count={count}, spacing=({provider.IconSpacingX},{provider.IconSpacingY}), maxRows={maxRows}, columns={columns}");
+
+            var report = service.ArrangeIntoFence(new RectI(0, 0, pX, pY), columns);
+
+            var hist = report.GroupBy(r => r.Category).OrderBy(g => (int)g.Key)
+                .ToDictionary(g => g.Key, g => g.Count());
+            Log("category histogram:");
+            foreach (var kv in hist) Log($"  {kv.Key} = {kv.Value}");
+
+            var after = provider.GetIcons();
+            foreach (var ic in after.Take(8))
+                Log($"  AFTER icon[{ic.Index}] '{ic.Name}' pos=({ic.Position.X},{ic.Position.Y})");
+            Log($"done: arranged {report.Count} icons; categories={hist.Count}");
+
+            var summary = string.Join("\n", hist.OrderBy(kv => (int)kv.Key).Select(kv => $"  {kv.Key}: {kv.Value}"));
+            MessageBox.Show($"Arranged {report.Count} desktop icons by category.\n\nCategories:\n{summary}\n\n日志: {logPath}", "M2 PoC", MessageBoxButton.OK);
         }
         catch (DesktopAutoArrangeException ex)
         {
-            MessageBox.Show(ex.Message, "Cannot arrange (M2 PoC)", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Log($"AutoArrange: {ex.Message}");
+            MessageBox.Show(ex.Message + "\n日志: " + logPath, "Cannot arrange (M2 PoC)", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"M2 PoC failed: {ex.GetType().Name}: {ex.Message}", "Cannot arrange (M2 PoC)", MessageBoxButton.OK, MessageBoxImage.Error);
+            Log($"EX: {ex.GetType().Name}: {ex.Message}");
+            MessageBox.Show($"M2 PoC failed: {ex.GetType().Name}: {ex.Message}\n日志: {logPath}", "Cannot arrange (M2 PoC)", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 }

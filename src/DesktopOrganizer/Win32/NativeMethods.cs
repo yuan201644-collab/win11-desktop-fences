@@ -26,6 +26,9 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
+    [DllImport("user32.dll")]
+    internal static extern int GetSystemMetrics(int nIndex);
+
     // Cross-process messaging
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     internal static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam,

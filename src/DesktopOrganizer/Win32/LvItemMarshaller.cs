@@ -9,6 +9,8 @@ namespace DesktopOrganizer.Win32;
 internal sealed class LvItemMarshaller : IDisposable
 {
     private readonly SafeProcessHandle _process;
+    // 持久远程缓冲：读位置用（Explorer 同步写入 POINT 后我们读取）
+    private readonly SafeRemoteBufferHandle _posBuf;
 
     internal LvItemMarshaller(int processId)
     {
@@ -17,6 +19,7 @@ internal sealed class LvItemMarshaller : IDisposable
             false, processId);
         if (h == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
         _process = new SafeProcessHandle(h, ownsHandle: true);
+        _posBuf = Alloc((IntPtr)8);
     }
 
     internal string ReadItemText(IntPtr listView, int index, uint msg, int maxChars = NativeMethods.MAX_PATH)
@@ -41,13 +44,24 @@ internal sealed class LvItemMarshaller : IDisposable
 
     internal (int X, int Y) ReadItemPosition(IntPtr listView, int index)
     {
-        var size = (IntPtr)8;
-        using var buf = Alloc(size);
-        Send(listView, NativeMethods.LVM_GETITEMPOSITION, (IntPtr)index, buf.DangerousGetHandle());
+        Send(listView, NativeMethods.LVM_GETITEMPOSITION, (IntPtr)index, _posBuf.DangerousGetHandle());
         var bytes = new byte[8];
-        if (!NativeMethods.ReadProcessMemory(_process.DangerousGetHandle(), buf.DangerousGetHandle(), bytes, size, out _))
+        if (!NativeMethods.ReadProcessMemory(_process.DangerousGetHandle(), _posBuf.DangerousGetHandle(), bytes, (IntPtr)8, out _))
             return (0, 0);
         return (BitConverter.ToInt32(bytes, 0), BitConverter.ToInt32(bytes, 4));
+    }
+
+    internal void SetItemPosition(IntPtr listView, int index, int x, int y)
+    {
+        // 实测结论（多轮 A/B 实验）：
+        // - 0x103E 打包坐标：消息返回成功但图标位置被忽略（不动）
+        // - 0x100F + POINT*：Explorer 把 lParam 当"打包坐标"拆（图标落点 = 指针地址高16位），
+        //   证明桌面 listview 对 0x100F 的语义就是 lParam=MAKELPARAM(x,y)（非文档的 POINT*）
+        // 因此正确用法：0x100F + 打包坐标。
+        var lp = (IntPtr)((y << 16) | (x & 0xFFFF)); // MAKELPARAM(x, y)
+        var result = Send(listView, NativeMethods.LVM_SETITEMPOSITION, (IntPtr)index, lp);
+        if (result == IntPtr.Zero)
+            throw new InvalidOperationException($"LVM_SETITEMPOSITION returned FALSE (Explorer refused) for index {index}");
     }
 
     private SafeRemoteBufferHandle Alloc(IntPtr size)
@@ -72,11 +86,12 @@ internal sealed class LvItemMarshaller : IDisposable
             throw new Win32Exception(Marshal.GetLastWin32Error());
     }
 
-    private static void Send(IntPtr hwnd, uint msg, IntPtr w, IntPtr l)
+    private static IntPtr Send(IntPtr hwnd, uint msg, IntPtr w, IntPtr l)
     {
         if (NativeMethods.SendMessageTimeout(hwnd, msg, w, l,
-                NativeMethods.SMTO_ABORTIFHUNG | NativeMethods.SMTO_NORMAL, 2000, out _) == IntPtr.Zero)
+                NativeMethods.SMTO_ABORTIFHUNG | NativeMethods.SMTO_NORMAL, 2000, out var result) == IntPtr.Zero)
             throw new Win32Exception(Marshal.GetLastWin32Error());
+        return result;
     }
 
     internal string RoundTripString(string value)
@@ -91,5 +106,9 @@ internal sealed class LvItemMarshaller : IDisposable
         return Encoding.Unicode.GetString(outBytes).TrimEnd('\0');
     }
 
-    public void Dispose() => _process.Dispose();
+    public void Dispose()
+    {
+        _posBuf.Dispose();
+        _process.Dispose();
+    }
 }
