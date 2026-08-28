@@ -56,6 +56,11 @@ public partial class MainWindow : Window
                 return;
             }
 
+            var icons = provider.GetIcons();
+            Log($"icons read = {icons.Count}");
+            foreach (var ic in icons)
+                Log($"  icon[{ic.Index}] '{ic.Name}' path={ic.Path ?? "(none)"} pos=({ic.Position.X},{ic.Position.Y})");
+
             var engine = new ClassifierEngine();
             var config = new ClassifierConfig();
             var service = new DesktopLayoutService(provider, engine, config);
@@ -67,13 +72,21 @@ public partial class MainWindow : Window
 
             var report = service.ArrangeIntoFence(new RectI(0, 0, pX, pY), columns);
 
+            // Detailed diagnostics: each icon's resolved info + where it was sent
+            foreach (var (icon, cat, tgt) in report)
+            {
+                var linkApp = icon.Path is not null ? DesktopShellEnumerator.LinkTargetAppFromPath(icon.Path) : null;
+                Log($"  [{cat}] icon[{icon.Index}] '{icon.Name}' path={icon.Path ?? "(none)"} linkApp={linkApp ?? "(null)"} → target=({tgt.X},{tgt.Y})");
+            }
+
             var hist = report.GroupBy(r => r.Category).OrderBy(g => (int)g.Key)
                 .ToDictionary(g => g.Key, g => g.Count());
             Log("category histogram:");
             foreach (var kv in hist) Log($"  {kv.Key} = {kv.Value}");
 
             var after = provider.GetIcons();
-            foreach (var ic in after.Take(8))
+            Log($"AFTER readback: {after.Count} icons");
+            foreach (var ic in after.Take(20))
                 Log($"  AFTER icon[{ic.Index}] '{ic.Name}' pos=({ic.Position.X},{ic.Position.Y})");
             Log($"done: arranged {report.Count} icons; categories={hist.Count}");
 
