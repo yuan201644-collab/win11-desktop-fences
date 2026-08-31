@@ -90,13 +90,6 @@ public partial class MainWindow : Window
     private void RestoreButton_Click(object sender, RoutedEventArgs e)
         => _overlay.RestoreSavedLayout();
 
-    // "保持显示分类" — keep the fence titles on screen even when another window is foreground.
-    private void PinCheckBox_Click(object sender, RoutedEventArgs e)
-    {
-        _overlay.Pinned = PinCheckBox.IsChecked == true;
-        _overlay.RefreshOverlay();
-    }
-
     // M2 PoC debug button — remove in M6
     private void ArrangeDebugButton_Click(object sender, RoutedEventArgs e)
     {

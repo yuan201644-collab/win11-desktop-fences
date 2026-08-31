@@ -37,13 +37,6 @@ public sealed class FenceOverlayController : IDisposable
     private bool _arranged;
     private IReadOnlyDictionary<string, PointI> _lastSaved = new Dictionary<string, PointI>();
 
-    /// <summary>
-    /// When true the overlay stays visible even while a third-party app is foreground (useful
-    /// for reading fence titles while working elsewhere). Off by default so the overlay never
-    /// overlaps an app the user is actively using in normal use.
-    /// </summary>
-    public bool Pinned { get; set; }
-
     // Icon display-name → its box title, resolved once at arrange time. RefreshOverlay reuses
     // it every tick so the overlay box matches the placement without re-resolving .lnk targets
     // (COM) dozens of times per refresh.
@@ -143,14 +136,11 @@ public sealed class FenceOverlayController : IDisposable
             _window.SetVisible(false);
             return;
         }
-        // When pinned the overlay stays up even with a third-party app foreground; otherwise it
-        // hides with the desktop (MoveOverlayAllowed's "desktop-focused" rule).
-        if (!Pinned && !DesktopShellStatus.IsOverlayAllowed())
-        {
-            _window.SetVisible(false);
-            return;
-        }
 
+        // The overlay is a non-topmost, click-through window layered over the desktop icons.
+        // It stays resident once arranged: foreground apps overlap it naturally (software over
+        // icons), and minimizing/returning to the desktop lets it show through again — no
+        // foreground-window coupling is needed.
         var icons = _provider.GetIcons();
         // Group by on-screen box (software split by purpose + folder/file/other), stable order.
         var placed = new List<(string Group, PointI Position)>();
@@ -163,7 +153,7 @@ public sealed class FenceOverlayController : IDisposable
             pad: 2, headerPx: FenceHeader.HeaderPx);
 
         var (x, y, w, h) = Primary;
-        _window.Render(x, y, w, h, clusters, Pinned);
+        _window.Render(x, y, w, h, clusters);
         _window.SetVisible(true);
         SaveLayout(); // follow manual drags so the final layout persists
     }

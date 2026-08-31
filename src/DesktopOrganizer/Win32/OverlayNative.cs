@@ -1,5 +1,4 @@
 using System;
-using System.Text;
 
 namespace DesktopOrganizer.Win32;
 
@@ -29,31 +28,5 @@ internal static class OverlayNative
         ex |= WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT;
         ex &= ~WS_EX_APPWINDOW;
         NativeMethods.SetWindowLongPtr(hwnd, GWL_EXSTYLE, (IntPtr)ex);
-    }
-}
-
-internal static class DesktopShellStatus
-{
-    private const int ClassNameCapacity = 256;
-
-    /// <summary>
-    /// True when the overlay may stay visible: the desktop shell is in front, or the
-    /// foreground window belongs to our own process (so it stays up right after the
-    /// user clicks "整理并显示分组" while our control window is still focused). The
-    /// overlay hides only when an actual third-party app takes the foreground.
-    /// </summary>
-    public static bool IsOverlayAllowed()
-    {
-        var fg = NativeMethods.GetForegroundWindow();
-        if (fg == IntPtr.Zero) return true;
-
-        // Our own control window being focused must not dismiss the overlay.
-        NativeMethods.GetWindowThreadProcessId(fg, out var pid);
-        if (pid == Environment.ProcessId) return true;
-
-        var buf = new StringBuilder(ClassNameCapacity);
-        if (NativeMethods.GetClassName(fg, buf, ClassNameCapacity) <= 0) return false;
-        var cls = buf.ToString();
-        return cls is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "Windows.UI.Core.CoreWindow";
     }
 }

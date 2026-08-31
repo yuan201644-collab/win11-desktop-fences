@@ -37,7 +37,7 @@ public partial class FenceOverlayWindow : Window
     /// monitor's dimensions in physical pixels; cluster <see cref="RectI"/> bounds are
     /// in the same space and are scaled to DIPs here.
     /// </summary>
-    public void Render(int originXPx, int originYPx, int widthPx, int heightPx, IReadOnlyList<FenceCluster> clusters, bool pinned = false)
+    public void Render(int originXPx, int originYPx, int widthPx, int heightPx, IReadOnlyList<FenceCluster> clusters)
     {
         var view = PresentationSource.FromVisual(this);
         if (view != null)
@@ -56,16 +56,22 @@ public partial class FenceOverlayWindow : Window
 
         Root.Children.Clear();
         foreach (var cluster in clusters)
-            AddCluster(cluster, pinned);
+            AddCluster(cluster);
     }
 
-    private void AddCluster(FenceCluster cluster, bool pinned)
+    private void AddCluster(FenceCluster cluster)
     {
         var left = cluster.Bounds.Left / _scaleX;
         var top = cluster.Bounds.Top / _scaleY;
         var width = cluster.Bounds.Width / _scaleX;
         var height = cluster.Bounds.Height / _scaleY;
         var headerPx = FenceHeader.HeaderPx / _scaleY; // title band inside the box (DIPs)
+
+        // Desktop labels are centered under each icon and can be wider than the icon cell, so the
+        // leftmost column's text bleeds left of the cells. Extend the box 20px leftward to hold
+        // those labels; nudge the right edge 10px inward so it doesn't reach into the next box.
+        left -= 20;
+        width += 10; // -20 left +10 width ⇒ left edge -20, right edge -10
 
         // Container panel. The fill stays translucent on purpose: the real desktop icons are
         // rendered *beneath* this topmost overlay, so a solid fill would hide them. The
@@ -91,7 +97,7 @@ public partial class FenceOverlayWindow : Window
             Width = Math.Max(0, width - 3),
             Height = Math.Max(0, headerPx - 2),
             CornerRadius = new CornerRadius(12, 12, 0, 0),
-            Background = new SolidColorBrush(Color.FromArgb((byte)(pinned ? 0x99 : 0xE6), 0x3B, 0x6E, 0xB0)),
+            Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x3B, 0x6E, 0xB0)),
             Child = new TextBlock
             {
                 Text = $"{cluster.Title} · {cluster.IconCount}",
@@ -111,13 +117,8 @@ public partial class FenceOverlayWindow : Window
     public void SetVisible(bool visible)
     {
         if (visible && !IsVisible)
-        {
             Show();
-            Topmost = true;
-        }
         else if (!visible && IsVisible)
-        {
             Hide();
-        }
     }
 }

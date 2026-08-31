@@ -11,6 +11,5 @@
         <Button Name="ArrangeDebugButton" Content="Arrange (M2 PoC)" Click="ArrangeDebugButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,10,0,0" />
         <Button Name="GroupButton" Content="整理并显示分组" Click="GroupButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="150,10,0,0" />
         <Button Name="RestoreButton" Content="恢复上次布局" Click="RestoreButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="290,10,0,0" />
-        <CheckBox Name="PinCheckBox" Content="保持显示分类" Click="PinCheckBox_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="425,12,0,0" ToolTip="勾选后，即使切换到其它窗口，分类框也保持显示（半透明、点击穿透）" />
     </Grid>
 </Window>

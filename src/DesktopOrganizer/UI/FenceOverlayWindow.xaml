@@ -7,7 +7,6 @@
         Background="Transparent"
         ShowInTaskbar="False"
         ShowActivated="False"
-        Topmost="True"
         ResizeMode="NoResize"
         Focusable="False"
         IsHitTestVisible="False">
