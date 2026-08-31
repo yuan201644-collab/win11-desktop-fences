@@ -2,6 +2,8 @@
 using System.IO;
 using System.Threading;
 using System.Windows;
+using Application = System.Windows.Application;
+using MessageBox = System.Windows.MessageBox;
 
 namespace DesktopOrganizer;
 

@@ -1,4 +1,6 @@
-﻿using System.IO;
+using System.ComponentModel;
+using System.Drawing;
+using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -14,6 +16,9 @@ using DesktopOrganizer.Core.Layout;
 using DesktopOrganizer.Core.Models;
 using DesktopOrganizer.Services;
 using DesktopOrganizer.Win32;
+using Application = System.Windows.Application;
+using Forms = System.Windows.Forms;
+using MessageBox = System.Windows.MessageBox;
 
 namespace DesktopOrganizer;
 
@@ -23,12 +28,58 @@ namespace DesktopOrganizer;
 public partial class MainWindow : Window
 {
     private readonly FenceOverlayController _overlay;
+    private readonly Forms.NotifyIcon _tray;
+    private bool _exiting;
 
     public MainWindow()
     {
         InitializeComponent();
         _overlay = new FenceOverlayController();
-        Closed += (_, _) => _overlay.Dispose();
+
+        // Closing the window (×) no longer quits — the app keeps running in the background so the
+        // overlay can follow the desktop. The tray icon is the way back in (and the way out).
+        _tray = new Forms.NotifyIcon
+        {
+            Icon = SystemIcons.Application,
+            Text = "桌面图标整理（运行中，回到桌面即显示分类框）",
+            Visible = true,
+            ContextMenuStrip = BuildTrayMenu(),
+        };
+        _tray.DoubleClick += (_, _) => ShowFromTray();
+        _tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) ShowFromTray(); };
+        Closing += OnClosing;
+    }
+
+    private void ShowFromTray()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (_exiting) return;
+        e.Cancel = true; // swallow the × — keep running from the tray
+        Hide();
+    }
+
+    private Forms.ContextMenuStrip BuildTrayMenu()
+    {
+        var menu = new Forms.ContextMenuStrip();
+        menu.Items.Add("打开控制窗", null, (_, _) => ShowFromTray());
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add("退出", null, (_, _) => ExitApp());
+        return menu;
+    }
+
+    private void ExitApp()
+    {
+        _exiting = true;
+        _tray.Visible = false;
+        _tray.Dispose();
+        _overlay.Dispose();
+        Application.Current.Shutdown();
     }
 
     // "整理并显示分组" — reposition icons into clusters then draw the labeled overlay.
@@ -38,6 +89,13 @@ public partial class MainWindow : Window
     // "恢复上次布局" — re-apply the last saved icon positions (clusters + manual tweaks).
     private void RestoreButton_Click(object sender, RoutedEventArgs e)
         => _overlay.RestoreSavedLayout();
+
+    // "保持显示分类" — keep the fence titles on screen even when another window is foreground.
+    private void PinCheckBox_Click(object sender, RoutedEventArgs e)
+    {
+        _overlay.Pinned = PinCheckBox.IsChecked == true;
+        _overlay.RefreshOverlay();
+    }
 
     // M2 PoC debug button — remove in M6
     private void ArrangeDebugButton_Click(object sender, RoutedEventArgs e)
@@ -83,7 +141,6 @@ public partial class MainWindow : Window
 
             var report = service.ArrangeIntoFence(new RectI(0, 0, pX, pY), maxRows);
 
-            // Detailed diagnostics: each icon's resolved info + where it was sent
             foreach (var (icon, cat, tgt) in report)
             {
                 var linkApp = icon.Path is not null ? DesktopShellEnumerator.LinkTargetAppFromPath(icon.Path) : null;

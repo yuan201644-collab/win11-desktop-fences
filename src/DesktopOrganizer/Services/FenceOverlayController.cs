@@ -37,16 +37,26 @@ public sealed class FenceOverlayController : IDisposable
     private bool _arranged;
     private IReadOnlyDictionary<string, PointI> _lastSaved = new Dictionary<string, PointI>();
 
+    /// <summary>
+    /// When true the overlay stays visible even while a third-party app is foreground (useful
+    /// for reading fence titles while working elsewhere). Off by default so the overlay never
+    /// overlaps an app the user is actively using in normal use.
+    /// </summary>
+    public bool Pinned { get; set; }
+
     // Icon display-name → its box title, resolved once at arrange time. RefreshOverlay reuses
     // it every tick so the overlay box matches the placement without re-resolving .lnk targets
     // (COM) dozens of times per refresh.
     private readonly Dictionary<string, string> _groupTitle = new(StringComparer.OrdinalIgnoreCase);
 
-    // Stable on-screen box order: software purpose boxes (in config order) first, then
-    // folder / file / other. Boxes with no icons simply produce no clusters, so "empty boxes"
-    // are hidden automatically instead of rendering an empty outline.
+    // Stable on-screen box order: software purpose boxes (in config order) first, then the
+    // software fallback (其他软件), then folder / file / other. Boxes with no icons simply
+    // produce no clusters, so "empty boxes" are hidden automatically instead of rendering an
+    // empty outline.
     private static readonly string[] KindBoxes = { "文件夹", "文件", "其他" };
-    private string[] BoxOrder => _grouping.Groups.Select(g => g.Title).Concat(KindBoxes).ToArray();
+    private string[] BoxOrder => _grouping.Groups.Select(g => g.Title)
+        .Append(SoftwarePurposeClassifier.FallbackTitle)
+        .Concat(KindBoxes).ToArray();
 
     public FenceOverlayController()
     {
@@ -133,7 +143,9 @@ public sealed class FenceOverlayController : IDisposable
             _window.SetVisible(false);
             return;
         }
-        if (!DesktopShellStatus.IsOverlayAllowed())
+        // When pinned the overlay stays up even with a third-party app foreground; otherwise it
+        // hides with the desktop (MoveOverlayAllowed's "desktop-focused" rule).
+        if (!Pinned && !DesktopShellStatus.IsOverlayAllowed())
         {
             _window.SetVisible(false);
             return;
@@ -151,7 +163,7 @@ public sealed class FenceOverlayController : IDisposable
             pad: 2, headerPx: FenceHeader.HeaderPx);
 
         var (x, y, w, h) = Primary;
-        _window.Render(x, y, w, h, clusters);
+        _window.Render(x, y, w, h, clusters, Pinned);
         _window.SetVisible(true);
         SaveLayout(); // follow manual drags so the final layout persists
     }

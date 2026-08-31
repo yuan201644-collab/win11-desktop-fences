@@ -10,7 +10,15 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms/Drawing global usings collide with WPF (Application, MessageBox, Color, Brushes).
+         We only need their types via explicit aliases (Forms.NotifyIcon, SystemIcons). -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="DesktopOrganizer.Tests" />

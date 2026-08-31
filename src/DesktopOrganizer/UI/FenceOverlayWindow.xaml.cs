@@ -37,7 +37,7 @@ public partial class FenceOverlayWindow : Window
     /// monitor's dimensions in physical pixels; cluster <see cref="RectI"/> bounds are
     /// in the same space and are scaled to DIPs here.
     /// </summary>
-    public void Render(int originXPx, int originYPx, int widthPx, int heightPx, IReadOnlyList<FenceCluster> clusters)
+    public void Render(int originXPx, int originYPx, int widthPx, int heightPx, IReadOnlyList<FenceCluster> clusters, bool pinned = false)
     {
         var view = PresentationSource.FromVisual(this);
         if (view != null)
@@ -56,10 +56,10 @@ public partial class FenceOverlayWindow : Window
 
         Root.Children.Clear();
         foreach (var cluster in clusters)
-            AddCluster(cluster);
+            AddCluster(cluster, pinned);
     }
 
-    private void AddCluster(FenceCluster cluster)
+    private void AddCluster(FenceCluster cluster, bool pinned)
     {
         var left = cluster.Bounds.Left / _scaleX;
         var top = cluster.Bounds.Top / _scaleY;
@@ -91,7 +91,7 @@ public partial class FenceOverlayWindow : Window
             Width = Math.Max(0, width - 3),
             Height = Math.Max(0, headerPx - 2),
             CornerRadius = new CornerRadius(12, 12, 0, 0),
-            Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x3B, 0x6E, 0xB0)),
+            Background = new SolidColorBrush(Color.FromArgb((byte)(pinned ? 0x99 : 0xE6), 0x3B, 0x6E, 0xB0)),
             Child = new TextBlock
             {
                 Text = $"{cluster.Title} · {cluster.IconCount}",
