@@ -65,38 +65,47 @@ public partial class FenceOverlayWindow : Window
         var top = cluster.Bounds.Top / _scaleY;
         var width = cluster.Bounds.Width / _scaleX;
         var height = cluster.Bounds.Height / _scaleY;
+        var headerPx = FenceHeader.HeaderPx / _scaleY; // title band inside the box (DIPs)
 
+        // Container panel. The fill stays translucent on purpose: the real desktop icons are
+        // rendered *beneath* this topmost overlay, so a solid fill would hide them. The
+        // container look comes from the tinted panel + a clearly visible wall border.
         var box = new Border
         {
             Width = width,
             Height = height,
-            CornerRadius = new CornerRadius(10),
-            Background = new SolidColorBrush(Color.FromArgb(0x26, 0x55, 0x8A, 0xC8)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(0xB0, 0x66, 0x99, 0xD0)),
-            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Background = new SolidColorBrush(Color.FromArgb(0x30, 0x2E, 0x3A, 0x5A)),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0xC8, 0xB4, 0xC7, 0xE4)),
+            BorderThickness = new Thickness(1.5),
         };
         Canvas.SetLeft(box, left);
         Canvas.SetTop(box, top);
         Canvas.SetZIndex(box, 0);
         Root.Children.Add(box);
 
-        var title = new Border
+        // Full-width title bar across the box top, matching the box's rounded top corners.
+        // Only covers the reserved header band — no icons sit beneath it.
+        var header = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(0xE0, 0x3B, 0x74, 0xA8)),
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10, 3, 10, 4),
+            Width = Math.Max(0, width - 3),
+            Height = Math.Max(0, headerPx - 2),
+            CornerRadius = new CornerRadius(12, 12, 0, 0),
+            Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x3B, 0x6E, 0xB0)),
             Child = new TextBlock
             {
                 Text = $"{cluster.Title} · {cluster.IconCount}",
                 FontSize = 13,
-                Foreground = Brushes.White,
                 FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 8, 0),
             },
         };
-        Canvas.SetLeft(title, left + 10);
-        Canvas.SetTop(title, top + 10);
-        Canvas.SetZIndex(title, 1);
-        Root.Children.Add(title);
+        Canvas.SetLeft(header, left);
+        Canvas.SetTop(header, top);
+        Canvas.SetZIndex(header, 1);
+        Root.Children.Add(header);
     }
 
     public void SetVisible(bool visible)

@@ -11,12 +11,14 @@ public sealed class DesktopLayoutService
     private readonly IDesktopIconProvider _provider;
     private readonly ClassifierEngine _engine;
     private readonly ClassifierConfig _config;
+    private readonly SoftwareGroupingConfig _grouping;
 
     public DesktopLayoutService(IDesktopIconProvider provider, ClassifierEngine engine, ClassifierConfig config)
     {
         _provider = provider;
         _engine = engine;
         _config = config;
+        _grouping = SoftwareGroupStore.Load(SoftwareGroupStore.DefaultFilePath);
     }
 
     /// <summary>
@@ -42,105 +44,94 @@ public sealed class DesktopLayoutService
         var icons = _provider.GetIcons();
         var classified = ClassifyAll(icons);
 
-        // Group by top-level item kind (then name) so the physical placement matches
-        // the kind-based overlay boxes: 软件 / 文件夹 / 文件 / 其他 each become a
-        // contiguous cluster on the desktop. Category is kept only for the report.
-        var ordered = classified
-            .Select(c => (Icon: c.Icon, Category: c.Category, Kind: ItemKindClassifier.FromEntry(c.Icon.Name, c.Icon.Path)))
-            .OrderBy(x => (int)x.Kind)
+        // Group by on-screen box (软件按用途拆成 办公/开发/影音/系统/其他 小框;文件夹/文件/其他各一个),
+        // then name. Software needs its resolved target exe to tell purpose apart, so we resolve
+        // link targets here too — placement and overlay must agree on the same box labels.
+        var items = classified
+            .Select(c => new
+            {
+                c.Icon,
+                c.Category,
+                Link = c.Icon.Path is null ? null : DesktopShellEnumerator.LinkTargetAppFromPath(c.Icon.Path),
+            })
+            .Select(x =>
+            {
+                var box = BoxGrouping.FromEntry(_grouping, x.Icon.Name, x.Icon.Path, x.Link);
+                return (x.Icon, x.Category, Box: box);
+            })
+            .OrderBy(x => x.Box.Order)
             .ThenBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var cellW = _provider.IconSpacingX;
         var cellH = _provider.IconSpacingY;
+        var headerPx = FenceHeader.HeaderPx;
+        const int FenceGapX = 24;
+        const int FenceGapY = 20;
 
-        // --- Calculate columns so the grouped grid fits within the visible desktop area ---
-        // Picking columns by "count / rows" assumes icons flow continuously, but each kind
-        // restarts at column 0 and inserts blank gap rows. That continuous model under-counts
-        // the real row use, so the deepest kinds spilled below the fold. Instead simulate the
-        // grouped placement for each candidate column count and take the widest one that stays
-        // within maxRows — every icon stays on the primary screen.
-        var maxCols = Math.Max(1, fence.Width / cellW);
-        var cols = ChooseColumns(ordered.Select(x => x.Kind).ToList(), maxRows, maxCols);
+        // Compact "fence" packaging: each kind packs into its own tight box whose size comes
+        // from its own icon count (few columns, so the box hugs its contents and reads as a
+        // tidy container, not a wide strip). Fences stack vertically and wrap to a new column
+        // when the next would run past the bottom of the screen. That, plus per-icon clamping,
+        // keeps every icon on the primary display and boxes non-overlapping by construction.
+        var top = fence.Y; var left = fence.X; var right = fence.Right; var bottom = fence.Bottom;
+        var availableH = Math.Max(1, fence.Height);
+        var maxRowsPerFence = Math.Max(3, availableH / Math.Max(1, cellH) - 1);
 
-        var targets = new List<PointI>(ordered.Count);
-        var row = 0;
-        var col = 0;
-        var prevKind = ordered[0].Kind;
+        // items is sorted by box order, so grouping by box title preserves that order and
+        // concatenating the groups reproduces `items` — targets line up with `items[i]` below.
+        var groups = items.GroupBy(x => x.Box.Title).Select(g => g.ToList()).ToList();
+        var targets = new List<PointI>(items.Count);
+        var cursorX = left; var cursorY = top; var columnMaxW = 0;
 
-        for (var i = 0; i < ordered.Count; i++)
+        foreach (var group in groups)
         {
-            var kind = ordered[i].Kind;
-            if (i > 0 && kind != prevKind)
+            var count = group.Count;
+            var cols = PackColumns(count, maxRowsPerFence);
+            var rows = Math.Max(1, (int)Math.Ceiling(count / (double)cols));
+            var fenceWidth = cols * cellW;
+            var fenceHeight = headerPx + rows * cellH;
+
+            // Wrap to a new column when this fence wouldn't fit under the ones above it.
+            if (cursorY > top && cursorY + fenceHeight > bottom)
             {
-                // Start each kind on a fresh row, with blank gap row(s) above it,
-                // so groups appear as visually distinct clusters on the desktop.
-                if (col != 0) row++;          // finish the current partial row first
-                row += CategoryGapRows;        // leave blank row(s) as the visual separator
-                col = 0;
-                prevKind = kind;
+                cursorX += columnMaxW + FenceGapX;
+                cursorY = top;
+                columnMaxW = 0;
             }
-            var x = fence.X + col * cellW;
-            var y = fence.Y + row * cellH;
-            // Clamp so every icon stays fully inside the fence. Without this, the
-            // Explorer grid anchor can render col 0 at a slightly negative coordinate,
-            // spilling the leftmost icons onto a secondary monitor to the left.
-            x = Math.Clamp(x, fence.X, Math.Max(fence.X, fence.Right - cellW));
-            y = Math.Clamp(y, fence.Y, Math.Max(fence.Y, fence.Bottom - cellH));
-            targets.Add(new PointI(x, y));
-            col++;
-            if (col >= cols) { col = 0; row++; }
+            columnMaxW = Math.Max(columnMaxW, fenceWidth);
+
+            for (var i = 0; i < count; i++)
+            {
+                // Icons start below the reserved title band, rounded/clamped to the fence.
+                var x = Math.Clamp(cursorX + (i % cols) * cellW, left, Math.Max(left, right - cellW));
+                var y = Math.Clamp(cursorY + headerPx + (i / cols) * cellH, top, Math.Max(top, bottom - cellH));
+                targets.Add(new PointI(x, y));
+            }
+            cursorY += fenceHeight + FenceGapY;
         }
 
         var report = new List<(DesktopIcon, Category, PointI)>();
-        for (var i = 0; i < ordered.Count && i < targets.Count; i++)
+        for (var i = 0; i < items.Count && i < targets.Count; i++)
         {
-            var (icon, category, _) = ordered[i];
+            var (icon, category, _) = items[i];
             _provider.SetPosition(icon.Index, targets[i]); // DesktopAutoArrangeException bubbles to caller
             report.Add((icon, category, targets[i]));
         }
         return report;
     }
 
-    // Blank rows inserted between kind boundaries for visual separation on the desktop.
-    private const int CategoryGapRows = 1;
-
     /// <summary>
-    /// Returns the widest column count whose simulated grouped grid fits within <paramref name="maxRows"/>.
-    /// Tries the full width first and walks down; if even one column overflows (far more icons than
-    /// rows allow) it still picks 1 so the topmost categories stay visible.
+    /// Chooses the internal column count for one fence: compact (square-ish) for a handful of
+    /// icons, but widened so a very large kind never grows taller than the visible area.
     /// </summary>
-    private static int ChooseColumns(IReadOnlyList<ItemKind> kinds, int maxRows, int maxCols)
+    private static int PackColumns(int count, int maxRowsPerFence)
     {
-        for (var cols = Math.Max(1, maxCols); cols >= 1; cols--)
-        {
-            if (RowsUsed(kinds, cols) <= maxRows) return cols;
-        }
-        return 1;
-    }
-
-    /// <summary>
-    /// Counts grid rows (1-based) the placement loop needs for a candidate column count,
-    /// mirroring exactly: restart at column 0 on each kind change, insert gap rows between kinds.
-    /// </summary>
-    private static int RowsUsed(IReadOnlyList<ItemKind> kinds, int cols)
-    {
-        var row = 0;
-        var col = 0;
-        var prev = kinds[0];
-        for (var i = 0; i < kinds.Count; i++)
-        {
-            var kind = kinds[i];
-            if (i > 0 && kind != prev)
-            {
-                if (col != 0) row++;
-                row += CategoryGapRows;
-                col = 0;
-                prev = kind;
-            }
-            col++;
-            if (col >= cols) { col = 0; row++; }
-        }
-        return row + 1;
+        if (count <= 1) return 1;
+        var cols = Math.Clamp((int)Math.Ceiling(Math.Sqrt(count)), 1, 6);
+        var rows = (int)Math.Ceiling(count / (double)cols);
+        if (rows > maxRowsPerFence)
+            cols = Math.Clamp((int)Math.Ceiling(count / (double)maxRowsPerFence), 1, 16);
+        return Math.Max(1, cols);
     }
 }

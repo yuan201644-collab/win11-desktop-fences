@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Threading;
@@ -29,10 +30,23 @@ public sealed class FenceOverlayController : IDisposable
     private readonly SysListView32Provider _provider;
     private readonly ClassifierEngine _engine = new();
     private readonly ClassifierConfig _config = new();
+    private readonly SoftwareGroupingConfig _grouping = SoftwareGroupStore.Load(SoftwareGroupStore.DefaultFilePath);
     private readonly DesktopLayoutService _layout;
     private readonly FenceOverlayWindow _window;
     private readonly DispatcherTimer _timer;
     private bool _arranged;
+    private IReadOnlyDictionary<string, PointI> _lastSaved = new Dictionary<string, PointI>();
+
+    // Icon display-name → its box title, resolved once at arrange time. RefreshOverlay reuses
+    // it every tick so the overlay box matches the placement without re-resolving .lnk targets
+    // (COM) dozens of times per refresh.
+    private readonly Dictionary<string, string> _groupTitle = new(StringComparer.OrdinalIgnoreCase);
+
+    // Stable on-screen box order: software purpose boxes (in config order) first, then
+    // folder / file / other. Boxes with no icons simply produce no clusters, so "empty boxes"
+    // are hidden automatically instead of rendering an empty outline.
+    private static readonly string[] KindBoxes = { "文件夹", "文件", "其他" };
+    private string[] BoxOrder => _grouping.Groups.Select(g => g.Title).Concat(KindBoxes).ToArray();
 
     public FenceOverlayController()
     {
@@ -102,8 +116,10 @@ public sealed class FenceOverlayController : IDisposable
         }
 
         _arranged = true;
+        RebuildGroupTitles();
         _timer.Start();
         RefreshOverlay();
+        SaveLayout();
     }
 
     /// <summary>
@@ -124,19 +140,136 @@ public sealed class FenceOverlayController : IDisposable
         }
 
         var icons = _provider.GetIcons();
-        // Group by top-level item kind (软件/文件夹/文件/其他), keeping a stable order.
+        // Group by on-screen box (software split by purpose + folder/file/other), stable order.
         var placed = new List<(string Group, PointI Position)>();
-        foreach (var kind in new[] { ItemKind.Software, ItemKind.Folder, ItemKind.File, ItemKind.Other })
-            placed.AddRange(
-                icons.Where(ic => ItemKindClassifier.FromEntry(ic.Name, ic.Path) == kind)
-                     .Select(ic => (ItemKindClassifier.Title(kind), ic.Position)));
+        foreach (var title in BoxOrder)
+            placed.AddRange(icons.Where(ic => GroupTitle(ic) == title).Select(ic => (title, ic.Position)));
         // Small pad so adjacent boxes stay distinguishable without fusing into one blob.
         // Kept tiny so vertically-adjacent clusters (dense mode) don't overlap much.
-        var clusters = FenceClusterBuilder.Build(placed, _provider.IconSpacingX, _provider.IconSpacingY, pad: 2);
+        var clusters = FenceClusterBuilder.Build(
+            placed, _provider.IconSpacingX, _provider.IconSpacingY,
+            pad: 2, headerPx: FenceHeader.HeaderPx);
 
         var (x, y, w, h) = Primary;
         _window.Render(x, y, w, h, clusters);
         _window.SetVisible(true);
+        SaveLayout(); // follow manual drags so the final layout persists
+    }
+
+    /// <summary>
+    /// Re-applies the last saved layout (category clusters plus any manual tweaks) to the
+    /// desktop and redraws the overlay. No-op detection covers the case where nothing was
+    /// ever arranged yet.
+    /// </summary>
+    public void RestoreSavedLayout()
+    {
+        if (!_provider.IsAvailable) return;
+        var saved = DesktopLayoutStore.Load(LayoutFilePath);
+        if (saved.Count == 0)
+        {
+            _window.SetVisible(false);
+            MessageBox.Show(
+                "还没有保存的布局。\n请先点击「整理并显示分组」生成一组，再在桌面上手动微调当前位置——调整会被自动记住。",
+                "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!_provider.DisableAutoArrange())
+        {
+            MessageBox.Show("桌面仍处于「自动排列图标」状态，无法恢复位置。\n请手动关闭：桌面右键 → 查看 → 取消勾选后重试。",
+                "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var (sx, sy, sw, sh) = Primary;
+        var spacingX = _provider.IconSpacingX;
+        var spacingY = _provider.IconSpacingY;
+        var byName = _provider.GetIcons()
+            .ToDictionary(ic => ic.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in saved)
+        {
+            if (!byName.TryGetValue(kv.Key, out var icon)) continue;
+            // Re-clamp to the primary screen so a monitor change can't push icons off-screen.
+            var x = Math.Clamp(kv.Value.X, LayoutMargin, Math.Max(LayoutMargin, sw - spacingX));
+            var y = Math.Clamp(kv.Value.Y, LayoutMargin, Math.Max(LayoutMargin, sh - spacingY));
+            _provider.SetPosition(icon.Index, new PointI(x, y));
+        }
+
+        _arranged = true;
+        RebuildGroupTitles();
+        _timer.Start();
+        RefreshOverlay();
+    }
+
+    /// <summary>
+    /// Recomputes each icon's box title (software by purpose) so the overlay matches the
+    /// placement. Best-effort: if target resolution fails we fall back to kind-only titles.
+    /// </summary>
+    private void RebuildGroupTitles()
+    {
+        _groupTitle.Clear();
+        try
+        {
+            foreach (var ic in _provider.GetIcons())
+            {
+                var link = ic.Path is null ? null : DesktopShellEnumerator.LinkTargetAppFromPath(ic.Path);
+                var title = BoxGrouping.FromEntry(_grouping, ic.Name, ic.Path, link).Title;
+                _groupTitle[ic.Name] = title;
+            }
+        }
+        catch (Exception)
+        {
+            // Empty/cached titles only — RefreshOverlay falls back to kind-based labels.
+        }
+    }
+
+    private string GroupTitle(DesktopIcon ic)
+    {
+        if (_groupTitle.TryGetValue(ic.Name, out var title)) return title;
+        // Cache miss (e.g. an icon the rebuild skipped on a transient error): classify now so a
+        // software icon still lands in a purpose box rather than dropping out of the overlay.
+        var kind = ItemKindClassifier.FromEntry(ic.Name, ic.Path);
+        if (kind == ItemKind.Software)
+        {
+            var link = ic.Path is null ? null : DesktopShellEnumerator.LinkTargetAppFromPath(ic.Path);
+            return SoftwarePurposeClassifier.Classify(_grouping, ic.Name, link);
+        }
+        return ItemKindClassifier.Title(kind);
+    }
+
+    // %LOCALAPPDATA%\DesktopOrganizer\layout.json — small, and survives when the UI can't.
+    private static string LayoutFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "layout.json");
+
+    /// <summary>
+    /// Persists the desktop's current icon positions. Best-effort: a transient failure is
+    /// ignored rather than surfaced. Only writes when the layout actually changed so the
+    /// 2s overlay tick doesn't churn the disk every time.
+    /// </summary>
+    private void SaveLayout()
+    {
+        try
+        {
+            var icons = _provider.GetIcons();
+            var map = icons.ToDictionary(ic => ic.Name, ic => ic.Position, StringComparer.OrdinalIgnoreCase);
+            if (Same(map, _lastSaved)) return;
+            DesktopLayoutStore.Save(LayoutFilePath, map);
+            _lastSaved = map;
+        }
+        catch (Exception)
+        {
+            // Persistence is best-effort — a save failure must never crash the tool.
+        }
+    }
+
+    private static bool Same(IReadOnlyDictionary<string, PointI> a, IReadOnlyDictionary<string, PointI> b)
+    {
+        if (a.Count != b.Count) return false;
+        foreach (var kv in a)
+        {
+            if (!b.TryGetValue(kv.Key, out var pos) || pos != kv.Value) return false;
+        }
+        return true;
     }
 
     public void Dispose()

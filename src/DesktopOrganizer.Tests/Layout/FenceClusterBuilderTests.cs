@@ -46,6 +46,18 @@ public class FenceClusterBuilderTests
     }
 
     [Fact]
+    public void HeaderPx_ExtendsBoxUpwardByTitleBand()
+    {
+        // Icon at (0, 34) — i.e. already offset below a 34px title band. With headerPx, the box
+        // must extend up to cover that band so the title sits inside the box, not over icons.
+        var cl = Assert.Single(FenceClusterBuilder.Build(
+            new[] { ("软件", new PointI(0, 34)) }, 96, 96, pad: 2, headerPx: 34));
+        // icon at y=34; box top = icon - pad(2) - header(34) = -2, box height = 96 + 2*2 + 34 = 134.
+        Assert.Equal(-2, cl.Bounds.Top);     // top reaches above the icon by the full title band
+        Assert.Equal(134, cl.Bounds.Height); // pad + icon cell + pad + header band
+    }
+
+    [Fact]
     public void OverlappingGroups_ArePushedApartNeverFused()
     {
         // 软件 and 文件夹 land on the same rows (gap row was sacrificed), so raw bounding

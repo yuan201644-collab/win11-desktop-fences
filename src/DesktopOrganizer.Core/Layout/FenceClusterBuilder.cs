@@ -10,6 +10,16 @@ namespace DesktopOrganizer.Core.Layout;
 /// </summary>
 public sealed record FenceCluster(string Title, int IconCount, RectI Bounds);
 
+public static class FenceHeader
+{
+    /// <summary>
+    /// Height (px) reserved at the top of every fence for its title bar. Icons are laid out
+    /// below it, so the title never overlaps the first icon. Shared by the layout (which
+    /// offsets icons down) and the overlay (which extends each box up by this much).
+    /// </summary>
+    public const int HeaderPx = 34;
+}
+
 /// <summary>
 /// Turns a set of placed icon anchors (each icon's top-left screen position), grouped
 /// by an arbitrary cluster key (currently the top-level <c>ItemKind</c>), into per-group
@@ -25,7 +35,7 @@ public static class FenceClusterBuilder
     /// ordering if a stable layout matters.</remarks>
     public static IReadOnlyList<FenceCluster> Build(
         IEnumerable<(string Group, PointI Position)> placed,
-        int cellWidth, int cellHeight, int pad = 8)
+        int cellWidth, int cellHeight, int pad = 8, int headerPx = 0)
     {
         var list = placed.Select(x => (x.Group, x.Position)).ToList();
         var clusters = new List<FenceCluster>();
@@ -44,9 +54,9 @@ public static class FenceClusterBuilder
             var maxX = pts.Max(p => p.X);
             var maxY = pts.Max(p => p.Y);
             var bounds = new RectI(
-                minX - pad, minY - pad,
+                minX - pad, minY - pad - headerPx,
                 (maxX + cellWidth + pad) - (minX - pad),
-                (maxY + cellHeight + pad) - (minY - pad));
+                (maxY + cellHeight + pad) - (minY - pad) + headerPx);
 
             // Bounding boxes can overlap (adjacent kinds sharing an edge, or a gap row sacrificed
             // under height pressure). Keep clusters GroupBy order (软件/文件夹/... first-seen = top),

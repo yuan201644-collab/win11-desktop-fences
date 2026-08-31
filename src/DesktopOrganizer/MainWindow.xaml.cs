@@ -35,6 +35,10 @@ public partial class MainWindow : Window
     private void GroupButton_Click(object sender, RoutedEventArgs e)
         => _overlay.ArrangeAndShow();
 
+    // "恢复上次布局" — re-apply the last saved icon positions (clusters + manual tweaks).
+    private void RestoreButton_Click(object sender, RoutedEventArgs e)
+        => _overlay.RestoreSavedLayout();
+
     // M2 PoC debug button — remove in M6
     private void ArrangeDebugButton_Click(object sender, RoutedEventArgs e)
     {
