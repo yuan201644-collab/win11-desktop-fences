@@ -75,13 +75,14 @@ public static class SoftwareGroupStore
             {
                 "word", "winword", "access", "excel", "wps", "wpp", "wpsoffice", "powerpnt", "ppt.exe",
                 "onenote", "outlook", "acrobat", "foxit", "sumatrapdf", "pdf", "office", "文档",
+                "办公套件", "vivo", "workbuddy",
             }),
             new("开发/信息安全", new[]
             {
                 "python", "py.exe", "jupyter", "pycharm", "visual studio", "vscode", "code.exe",
                 "devenv", "idea64", "eclipse", "navicat", "sqlserver", "sql", "burpsuite", "vmware",
                 "virtualbox", "docker", "git", "github", "postman", "node.js", "notepad++",
-                "sublime", "wireshark", "kali", "火绒", "数据库",
+                "sublime", "wireshark", "kali", "火绒", "数据库", "scratch",
             }),
             new("影音娱乐/游戏", new[]
             {
@@ -95,6 +96,10 @@ public static class SoftwareGroupStore
             {
                 "wechat", "微信", "qq.exe", "qq", "抖音", "douyin", "腾讯会议", "meeting", "钉钉",
                 "dingtalk", "飞书", "feishu", "企业微信", "豆包", "telegram", "discord", "zoom",
+            }),
+            new("学习教育", new[]
+            {
+                "学习通", "cxstudy", "mooc", "网课", "课程",
             }),
             // 网盘 comes BEFORE 上网 on purpose: besides the netdisk apps, 上网/网络工具 carries a
             // bare "夸克", whose substring would otherwise swallow "夸克网盘" into the browser box.
@@ -120,7 +125,7 @@ public static class SoftwareGroupStore
             new("硬件工具", new[]
             {
                 "legion", "nvidia", "gpu-z", "cpuz", "hwinfo", "msi afterburner", "键盘", "ajazz",
-                "鼠标", "驱动", "driver", "硬件", "鲁大师",
+                "鼠标", "驱动", "driver", "硬件", "鲁大师", "图吧", "xear",
             }),
             new("GIS 地理工具", new[]
             {
@@ -134,7 +139,7 @@ public static class SoftwareGroupStore
             {
                 "snipaste", "pixpin", "截图", "screenshot", "7zip", "7zfm", "winrar", "bandizip",
                 "压缩", "everything", "powertoys", "taskmgr", "regedit", "notepad", "写字板",
-                "calculator", "计算器", "清理",
+                "calculator", "计算器", "清理", "parsec", "fences",
             }),
         },
     };

@@ -23,17 +23,23 @@ internal static class DesktopShellEnumerator
 {
     /// <summary>
     /// Maps each desktop icon's display name to its full file-system path.
-    /// For .lnk files the key is the link name (without extension); for everything
-    /// else it's the filename as shown in Explorer.
-    /// Returns an empty map on any failure — never throws.
+    /// Enumerates BOTH the user desktop and the public desktop (Explorer merges them into
+    /// the single desktop the ListView shows). For .lnk files the key is the link name
+    /// (without extension); for everything else it's the filename as shown in Explorer.
+    /// When two entries share a display name, a shortcut wins over a same-named folder so
+    /// an app isn't misread as a folder. Returns an empty map on any failure — never throws.
     /// </summary>
     public static IReadOnlyDictionary<string, string> DisplayNameToPath()
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        try
+        var roots = new[]
         {
-            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            if (!Directory.Exists(desktop)) return map;
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
+        };
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var desktop in roots)
+        {
+            if (!Directory.Exists(desktop)) continue;
 
             foreach (var entry in Directory.EnumerateFileSystemEntries(desktop))
             {
@@ -42,21 +48,34 @@ internal static class DesktopShellEnumerator
                     // Explorer hides known file extensions, so the ListView shows "报告"
                     // for a file named "报告.txt". Key the map by BOTH the full filename
                     // and the extension-stripped name so path lookup succeeds either way.
-                    var withExt = Path.GetFileName(entry);
-                    var withoutExt = Path.GetFileNameWithoutExtension(withExt);
-                    if (!string.IsNullOrEmpty(withoutExt) && !map.ContainsKey(withoutExt))
-                        map[withoutExt] = entry;
-                    if (!string.IsNullOrEmpty(withExt) && !map.ContainsKey(withExt))
-                        map[withExt] = entry;
+                    AddName(map, entry, Path.GetFileNameWithoutExtension(entry));
+                    AddName(map, entry, Path.GetFileName(entry));
                 }
                 catch (Exception) { /* skip one entry */ }
             }
         }
-        catch (Exception)
-        {
-            // Desktop folder inaccessible — degrade gracefully.
-        }
         return map;
+    }
+
+    private static void AddName(IDictionary<string, string> map, string entry, string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return;
+        if (!map.TryGetValue(name, out var existing))
+        {
+            map[name] = entry;
+            return;
+        }
+        // Collision (e.g. a shortcut on the public desktop collides with a same-named folder on
+        // the user desktop). A shortcut is an application; a folder is not — prefer the software
+        // entry so an app isn't read as a folder.
+        if (IsSoftwareEntry(entry) && !IsSoftwareEntry(existing))
+            map[name] = entry;
+    }
+
+    private static bool IsSoftwareEntry(string path)
+    {
+        var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+        return ext is "lnk" or "exe" or "url" or "com" or "msi" or "bat" or "cmd" or "appref-ms";
     }
 
     /// <summary>

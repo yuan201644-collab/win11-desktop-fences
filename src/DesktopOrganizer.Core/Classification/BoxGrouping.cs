@@ -22,12 +22,14 @@ public static class BoxGrouping
             var title = SoftwarePurposeClassifier.Classify(config, name, linkTarget);
             return (SoftwarePurposeClassifier.OrderOf(config, title), title);
         }
-        var baseOrder = config.Groups.Count;
+        var baseOrder = config.Groups.Count; // 其他软件 (software fallback) occupies slot N
         return kind switch
         {
-            ItemKind.Folder => (baseOrder, "文件夹"),
-            ItemKind.File => (baseOrder + 1, "文件"),
-            _ => (baseOrder + 2, "其他"),
+            // Keep every slot distinct so software (incl. fallback 其他软件) always sorts BEFORE
+            // folders — folders used to share slot N with 其他软件, interleaving their icons.
+            ItemKind.Folder => (baseOrder + 1, "文件夹"),
+            ItemKind.File => (baseOrder + 2, "文件"),
+            _ => (baseOrder + 3, "其他"),
         };
     }
 }

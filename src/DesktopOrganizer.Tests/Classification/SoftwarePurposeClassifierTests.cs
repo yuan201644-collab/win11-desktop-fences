@@ -141,3 +141,40 @@ public class BoxGroupingTests
         finally { if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir); }
     }
 }
+
+// Real desktop software mapped against the seeded keyword table — guards the分类 of the actual
+// apps that previously fell into 其他软件 and ended up inside the folder box.
+public class RealDesktopSoftwareTests
+{
+    private static readonly SoftwareGroupingConfig Config = SoftwareGroupStore.Default();
+
+    [Theory]
+    [InlineData("办公软件", "vivo办公套件", "pcsuite.exe")]
+    [InlineData("办公软件", "WorkBuddy", "WorkBuddy.exe")]
+    public void OfficeApps_GoToOfficeBox(string expected, string name, string? target)
+        => Assert.Equal(expected, SoftwarePurposeClassifier.Classify(Config, name, target));
+
+    [Fact]
+    public void Scratch3_IsDev()
+        => Assert.Equal("开发/信息安全", SoftwarePurposeClassifier.Classify(Config, "Scratch 3", "Scratch 3.exe"));
+
+    [Theory]
+    [InlineData("学习教育", "学习通", "cxstudy.exe")]
+    [InlineData("学习教育", "中国大学MOOC_优质在线课程学习平台", "msedge_proxy.exe")]
+    public void StudyApps_GoToLearningBox(string expected, string name, string? target)
+        => Assert.Equal(expected, SoftwarePurposeClassifier.Classify(Config, name, target));
+
+    [Theory]
+    [InlineData("硬件工具", "ZhuAudio USB Device", "XearAudioCenter_x64.exe")]
+    [InlineData("硬件工具", "图吧工具箱", "图吧工具箱2026.exe")]
+    public void HardwareApps_GoToHardwareBox(string expected, string name, string? target)
+        => Assert.Equal(expected, SoftwarePurposeClassifier.Classify(Config, name, target));
+
+    [Fact]
+    public void Parsec_IsSystemUtility()
+        => Assert.Equal("系统小工具", SoftwarePurposeClassifier.Classify(Config, "ParsecVDisplay", "ParsecVDisplay.exe"));
+
+    [Fact]
+    public void Universe_StaysOtherSoftware()
+        => Assert.Equal(SoftwarePurposeClassifier.FallbackTitle, SoftwarePurposeClassifier.Classify(Config, "Universe", "Universe.exe"));
+}
