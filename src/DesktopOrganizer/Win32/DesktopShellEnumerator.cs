@@ -39,13 +39,15 @@ internal static class DesktopShellEnumerator
             {
                 try
                 {
-                    var name = Path.GetFileName(entry);
-                    // Strip .lnk extension to match how Explorer displays shortcut names
-                    var displayName = name.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)
-                        ? name[..^4]   // without ".lnk"
-                        : name;
-                    if (!string.IsNullOrEmpty(displayName) && !map.ContainsKey(displayName))
-                        map[displayName] = entry;
+                    // Explorer hides known file extensions, so the ListView shows "报告"
+                    // for a file named "报告.txt". Key the map by BOTH the full filename
+                    // and the extension-stripped name so path lookup succeeds either way.
+                    var withExt = Path.GetFileName(entry);
+                    var withoutExt = Path.GetFileNameWithoutExtension(withExt);
+                    if (!string.IsNullOrEmpty(withoutExt) && !map.ContainsKey(withoutExt))
+                        map[withoutExt] = entry;
+                    if (!string.IsNullOrEmpty(withExt) && !map.ContainsKey(withExt))
+                        map[withExt] = entry;
                 }
                 catch (Exception) { /* skip one entry */ }
             }

@@ -22,10 +22,18 @@ namespace DesktopOrganizer;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private readonly FenceOverlayController _overlay;
+
     public MainWindow()
     {
         InitializeComponent();
+        _overlay = new FenceOverlayController();
+        Closed += (_, _) => _overlay.Dispose();
     }
+
+    // "整理并显示分组" — reposition icons into clusters then draw the labeled overlay.
+    private void GroupButton_Click(object sender, RoutedEventArgs e)
+        => _overlay.ArrangeAndShow();
 
     // M2 PoC debug button — remove in M6
     private void ArrangeDebugButton_Click(object sender, RoutedEventArgs e)

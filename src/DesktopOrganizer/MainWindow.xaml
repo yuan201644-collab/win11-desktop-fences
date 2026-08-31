@@ -8,6 +8,7 @@
         Title="MainWindow" Height="450" Width="800">
     <Grid>
         <!-- M2 PoC debug button — remove in M6 -->
-        <Button Name="ArrangeDebugButton" Content="Arrange (M2 PoC)" Click="ArrangeDebugButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" />
+        <Button Name="ArrangeDebugButton" Content="Arrange (M2 PoC)" Click="ArrangeDebugButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,10,0,0" />
+        <Button Name="GroupButton" Content="整理并显示分组" Click="GroupButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="150,10,0,0" />
     </Grid>
 </Window>

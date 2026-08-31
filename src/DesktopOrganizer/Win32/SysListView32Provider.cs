@@ -108,6 +108,31 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         return new PointI(x + _clientLeft, y + _clientTop); // client → screen
     }
 
+    public bool IsAutoArrangeOn
+    {
+        get
+        {
+            if (!_available) return true;
+            var style = NativeMethods.GetWindowLong(_hwnd, NativeMethods.GWL_STYLE);
+            return (style & NativeMethods.LVS_AUTOARRANGE) != 0;
+        }
+    }
+
+    /// <summary>
+    /// Turns off the desktop listview's "Auto arrange" style so <see cref="SetPosition"/>
+    /// stops being ignored. Only clears the style bit if it is currently set; a no-op
+    /// otherwise. Returns true when auto-arrange is off afterwards.
+    /// </summary>
+    public bool DisableAutoArrange()
+    {
+        if (!_available) return false;
+        var style = NativeMethods.GetWindowLong(_hwnd, NativeMethods.GWL_STYLE);
+        if ((style & NativeMethods.LVS_AUTOARRANGE) == 0) return true;
+        NativeMethods.SetWindowLong(_hwnd, NativeMethods.GWL_STYLE, style & ~NativeMethods.LVS_AUTOARRANGE);
+        var after = NativeMethods.GetWindowLong(_hwnd, NativeMethods.GWL_STYLE);
+        return (after & NativeMethods.LVS_AUTOARRANGE) == 0;
+    }
+
     public void SetPosition(int index, PointI screenPos)
     {
         if (!_available) return;
