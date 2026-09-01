@@ -78,3 +78,43 @@ public class FoldExpandKeyIndexTests
         Assert.Equal("name:此电脑", FenceOverlayController.StableKey(ic));
     }
 }
+
+/// <summary>
+/// Regression tests for the expand record-keeping rule. A mid-restore failure used to drop the
+/// collapse record anyway (the old <c>ExpandRestore</c> removed it unconditionally after a
+/// <c>break</c> on <see cref="DesktopAutoArrangeException"/>), permanently stranding the remaining
+/// icons off-screen with no tab to bring them back — another "folded but won't open" symptom.
+/// <see cref="FenceOverlayController.IsExpandComplete"/> is what now decides whether the record is
+/// safe to drop; these lock that decision.
+/// </summary>
+public class ExpandRecordKeepTests
+{
+    [Fact]
+    public void IsExpandComplete_AllRestored_DropsRecord()
+    {
+        // 3 of 3 restored, none failed, none missing → safe to drop the record (normal expand).
+        Assert.True(FenceOverlayController.IsExpandComplete(restored: 3, missing: 0, failed: 0, total: 3));
+    }
+
+    [Fact]
+    public void IsExpandComplete_MidRestoreFailure_KeepsRecord()
+    {
+        // Auto-arrange re-engaged on the 2nd of 3 icons → 1 restored, 1 failed, 1 untouched.
+        // The record MUST be kept so icons #2 and #3 are not stranded with no way back.
+        Assert.False(FenceOverlayController.IsExpandComplete(restored: 1, missing: 0, failed: 1, total: 3));
+    }
+
+    [Fact]
+    public void IsExpandComplete_GoneIconRestoredRest_DropsRecord()
+    {
+        // One icon genuinely gone (deleted/moved) but the other two restored, none failed → the box
+        // can still expand; missing icons are not a reason to keep the user stuck collapsed.
+        Assert.True(FenceOverlayController.IsExpandComplete(restored: 2, missing: 1, failed: 0, total: 3));
+    }
+
+    [Fact]
+    public void IsExpandComplete_NothingToRestore_DropsRecord()
+    {
+        Assert.True(FenceOverlayController.IsExpandComplete(restored: 0, missing: 0, failed: 0, total: 0));
+    }
+}

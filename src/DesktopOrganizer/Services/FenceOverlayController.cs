@@ -519,8 +519,12 @@ public sealed class FenceOverlayController : IDisposable
         if (_host.IsCollapsed(title)) _host.ToggleCollapse(title);
         if (!ExpandRestore(title))
         {
+            // The box is going away, so there's no tab left to expand from. Drop the orphaned record
+            // and pull any still-parked icons back to the visible desktop rather than leaving them
+            // stranded off-screen with no way back.
             _hiddenIcons.Remove(title);
             _tabBounds.Remove(title);
+            RescueStrandedIcons();
         }
     }
 
@@ -657,7 +661,7 @@ public sealed class FenceOverlayController : IDisposable
             return false;
         }
 
-        int missing = 0, failed = 0;
+        int missing = 0, restored = 0, failed = 0;
         foreach (var (key, pos) in originals)
         {
             if (!byKey.TryGetValue(key, out var ic))
@@ -668,24 +672,39 @@ public sealed class FenceOverlayController : IDisposable
                 TraceLog($"[expand] '{title}' MISSING icon '{key}'");
                 continue;
             }
-            try { _provider.SetPosition(ic.Index, pos); }
-            catch (DesktopAutoArrangeException ex)
+            try { _provider.SetPosition(ic.Index, pos); restored++; }
+            catch (DesktopAutoArrangeException)
             {
+                // Auto-arrange re-engaged mid-restore (rare style reset). Try to clear it once and
+                // retry this icon; only give up — and KEEP the record — if it still fails, so the
+                // remaining icons are never stranded off-screen with no way back.
+                TraceLog($"[expand] '{title}' auto-arrange re-engaged at '{key}' — re-disabling");
+                if (_provider.DisableAutoArrange())
+                {
+                    System.Threading.Thread.Sleep(150);
+                    try { _provider.SetPosition(ic.Index, pos); restored++; continue; }
+                    catch (Exception ex) { TraceLog($"[expand] '{title}' retry FAILED '{key}' @{pos}: {ex.Message}"); }
+                }
                 failed++;
-                TraceLog($"[expand] '{title}' FAILED '{key}' @{pos}: {ex.Message}");
-                break; // auto-arrange came back mid-restore — stop before the rest gets stranded
+                break;
             }
             catch (Exception ex)
             {
+                // Non-auto-arrange error on this icon — log it but keep going to rescue the rest.
                 failed++;
                 TraceLog($"[expand] '{title}' FAILED '{key}' @{pos}: {ex.Message}");
             }
         }
 
-        if (missing > 0 || failed > 0)
-            TraceLog($"[expand] '{title}' INCOMPLETE: restored={originals.Count - missing - failed} missing={missing} failed={failed}");
-        else
-            TraceLog($"[expand] '{title}': restored {originals.Count} icon(s) to original positions");
+        // Drop the record ONLY when every icon is accounted for (restored or confirmed gone) and
+        // none actually failed. Any real failure keeps the record + returns false so the tab stays
+        // collapsed and the user can retry — never strand icons off-screen with a cleared record.
+        if (!IsExpandComplete(restored, missing, failed, originals.Count))
+        {
+            TraceLog($"[expand] '{title}' INCOMPLETE: restored={restored} missing={missing} failed={failed} — record KEPT, retry available");
+            return false;
+        }
+        TraceLog($"[expand] '{title}': restored {restored} icon(s) to original positions");
         _hiddenIcons.Remove(title);
         _tabBounds.Remove(title);
         return true;
@@ -793,6 +812,13 @@ public sealed class FenceOverlayController : IDisposable
         }
         return dict;
     }
+
+    /// <summary>An expand is only "complete" — safe to drop its collapse record — when every icon is
+    /// accounted for (restored to its original position, or confirmed gone from the desktop) and NONE
+    /// actually failed to move. A single failure (e.g. auto-arrange re-engaged mid-restore) must keep
+    /// the record so the icons are never stranded off-screen with no way back.</summary>
+    internal static bool IsExpandComplete(int restored, int missing, int failed, int total) =>
+        failed == 0 && restored + missing == total;
 
     /// <summary>Brings back icons stranded off-screen by a prior crash whose collapse record was
     /// lost (an expand that threw before persisting). Intentionally-collapsed icons (present in
