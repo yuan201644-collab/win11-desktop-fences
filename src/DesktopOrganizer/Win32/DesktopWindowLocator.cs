@@ -4,7 +4,15 @@ namespace DesktopOrganizer.Win32;
 
 public static class DesktopWindowLocator
 {
-    public static IntPtr FindDesktopListView()
+    public static IntPtr FindDesktopListView() => FindDesktopHost().ListView;
+
+    /// <summary>
+    /// Resolves the desktop shell windows needed to embed a fence behind the icons:
+    /// the SHELLDLL_DefView (the desktop's icon container, itself inside a WorkerW/Progman)
+    /// and the SysListView32 (the icon view). Reparenting a fence window under <see cref="DesktopHost.DefView"/>
+    /// and inserting it before <see cref="DesktopHost.ListView"/> (z-order) puts the fence behind the icons.
+    /// </summary>
+    public static DesktopHost FindDesktopHost()
     {
         var progman = NativeMethods.FindWindow("Progman", null);
         var defView = progman != IntPtr.Zero
@@ -33,6 +41,8 @@ public static class DesktopWindowLocator
         var listView = NativeMethods.FindWindowEx(defView, IntPtr.Zero, "SysListView32", null);
         if (listView == IntPtr.Zero)
             throw new DesktopWindowNotFoundException("Desktop SysListView32 not found.");
-        return listView;
+        return new DesktopHost(defView, listView);
     }
+
+    public readonly record struct DesktopHost(IntPtr DefView, IntPtr ListView);
 }

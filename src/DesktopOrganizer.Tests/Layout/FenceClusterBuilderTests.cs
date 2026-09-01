@@ -46,6 +46,36 @@ public class FenceClusterBuilderTests
     }
 
     [Fact]
+    public void PerSidePadding_ExtendsEachEdgeIndependently()
+    {
+        // One icon cell [200..296]x[300..396]; default pad=2 is overridden per edge.
+        var cl = Assert.Single(FenceClusterBuilder.Build(
+            new[] { ("文档", new PointI(200, 300)) }, 96, 96, pad: 2,
+            padLeft: 20, padRight: 10, padTop: 4, padBottom: 8));
+        // left edge = 200-20=180; top edge = 300-4=296;
+        // width = (200+96+10) - 180 = 126; height = (300+96+8) - 296 = 108.
+        Assert.Equal(new RectI(180, 296, 126, 108), cl.Bounds);
+    }
+
+    [Fact]
+    public void WithoutOverlapSeparation_BoxesStayOverTheirOwnIcons()
+    {
+        // Two overlapping groups. With separateOverlaps:false the later box must NOT be pushed down
+        // away from its icons (that dislocates the drawn box from the real icons) — it keeps its own
+        // icon-covered bounds. 软件 at (0,0), 文件夹 at (0,96); pad=2.
+        var clusters = FenceClusterBuilder.Build(
+            new[] {
+                ("软件", new PointI(0, 0)),
+                ("文件夹", new PointI(0, 96)),
+            }, 96, 96, pad: 2, separateOverlaps: false);
+        Assert.Equal(2, clusters.Count);
+        // 文件夹 box top = icon y(96) - pad(2) = 94, i.e. it hugs its own first icon rather than
+        // being shoved below the previous box (which would push its top to ≥ 106).
+        Assert.Equal(94, clusters.Single(c => c.Title == "文件夹").Bounds.Top);
+        Assert.Equal(-2, clusters.Single(c => c.Title == "软件").Bounds.Top);
+    }
+
+    [Fact]
     public void HeaderPx_ExtendsBoxUpwardByTitleBand()
     {
         // Icon at (0, 34) — i.e. already offset below a 34px title band. With headerPx, the box

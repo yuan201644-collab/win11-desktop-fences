@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Threading;
 using DesktopOrganizer.Core.Classification;
+using DesktopOrganizer.Core.Config;
 using DesktopOrganizer.Core.Layout;
 using DesktopOrganizer.Core.Models;
 using DesktopOrganizer.UI;
@@ -32,10 +33,21 @@ public sealed class FenceOverlayController : IDisposable
     private readonly ClassifierConfig _config = new();
     private readonly SoftwareGroupingConfig _grouping = SoftwareGroupStore.Load(SoftwareGroupStore.DefaultFilePath);
     private readonly DesktopLayoutService _layout;
-    private readonly FenceOverlayWindow _window;
+    private readonly FenceHost _host;
     private readonly DispatcherTimer _timer;
     private bool _arranged;
     private IReadOnlyDictionary<string, PointI> _lastSaved = new Dictionary<string, PointI>();
+    // Last seen icon index→position and shell-foreground state; lets RefreshOverlay skip the
+    // re-render when nothing changed, so the layered fence windows don't flash every tick.
+    private Dictionary<int, PointI> _lastIcons = new();
+    private bool _lastShown;
+    private FenceInsets _insets;
+
+    // Drag state. _membership maps each box title → the ListView item indexes in it (rebuilt each
+    // RefreshOverlay); _dragStart snapshots those positions on DragStarted so deltas map to absolutes.
+    private IReadOnlyDictionary<string, int[]> _membership = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<int, PointI> _dragStart = new();
+    private bool _dragging;
 
     // Icon display-name → its box title, resolved once at arrange time. RefreshOverlay reuses
     // it every tick so the overlay box matches the placement without re-resolving .lnk targets
@@ -53,11 +65,40 @@ public sealed class FenceOverlayController : IDisposable
 
     public FenceOverlayController()
     {
+        _insets = FenceInsetStore.Load(FenceInsetFilePath);
         _provider = new SysListView32Provider();
         _layout = new DesktopLayoutService(_provider, _engine, _config);
-        _window = new FenceOverlayWindow();
+        _host = new FenceHost();
+        _host.DragStarted += OnDragStarted;
+        _host.DragMoved += OnDragMoved;
+        _host.DragEnded += OnDragEnded;
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _timer.Tick += (_, _) => RefreshOverlay();
+    }
+
+    /// <summary>
+    /// Fence palette forwarded to the host; setting it recolors all visible fences live so the
+    /// settings UI can preview changes as the user drags colors/alpha.
+    /// </summary>
+    public OverlayAppearance Appearance
+    {
+        get => _host.Appearance;
+        set => _host.Appearance = value;
+    }
+
+    /// <summary>
+    /// Per-edge box padding. Setting it repersists and redraws every box live so the settings UI can
+    /// preview box width as the user slides one of the inset sliders.
+    /// </summary>
+    public FenceInsets BoxInsets
+    {
+        get => _insets;
+        set
+        {
+            _insets = value ?? FenceInsets.Default;
+            try { FenceInsetStore.Save(FenceInsetFilePath, _insets); } catch (Exception) { /* best-effort */ }
+            ForceRefresh();
+        }
     }
 
     // Primary monitor in virtual-screen space. On this machine a secondary monitor sits
@@ -86,7 +127,7 @@ public sealed class FenceOverlayController : IDisposable
         // Positions are ignored while "Auto arrange" is on — silently clear it first.
         if (!_provider.DisableAutoArrange())
         {
-            _window.SetVisible(false);
+            _host.SetVisible(false);
             MessageBox.Show(
                 "无法关闭桌面的「自动排列图标」。\n请手动关闭后重试：桌面右键 → 查看 → 取消勾选「自动排列图标」。",
                 "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -110,7 +151,7 @@ public sealed class FenceOverlayController : IDisposable
         catch (DesktopAutoArrangeException)
         {
             // Re-enabled between Disable and here (or the style clear didn't stick).
-            _window.SetVisible(false);
+            _host.SetVisible(false);
             MessageBox.Show(
                 "桌面仍处于「自动排列图标」状态，图标位置已被忽略。\n" +
                 "请手动关闭：桌面右键 → 查看 → 取消勾选「自动排列图标」，然后重试。",
@@ -133,29 +174,93 @@ public sealed class FenceOverlayController : IDisposable
     {
         if (!_arranged || !_provider.IsAvailable)
         {
-            _window.SetVisible(false);
+            _host.SetVisible(false);
             return;
         }
 
-        // The overlay is a non-topmost, click-through window layered over the desktop icons.
-        // It stays resident once arranged: foreground apps overlap it naturally (software over
-        // icons), and minimizing/returning to the desktop lets it show through again — no
-        // foreground-window coupling is needed.
+        // Don't disturb the mesh mid-drag — the user's hand is on the icons.
+        if (_dragging) return;
+
+        // Idempotent: if neither the icon positions nor the shell-foreground visibility changed,
+        // re-rendering the layered windows would just make them flash — skip it entirely.
         var icons = _provider.GetIcons();
-        // Group by on-screen box (software split by purpose + folder/file/other), stable order.
+        var positions = IconPositions(icons);
+        bool shown = ShouldShowFences();
+
+        if (SamePos(positions, _lastIcons) && shown == _lastShown) return;
+        _lastIcons = positions;
+        _lastShown = shown;
+
+        // Group by on-screen box (software split by purpose + folder/file/other), stable order,
+        // and remember which ListView indexes each box holds (for dragging).
         var placed = new List<(string Group, PointI Position)>();
+        var membership = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
         foreach (var title in BoxOrder)
-            placed.AddRange(icons.Where(ic => GroupTitle(ic) == title).Select(ic => (title, ic.Position)));
+        {
+            foreach (var ic in icons.Where(x => GroupTitle(x) == title))
+            {
+                placed.Add((title, ic.Position));
+                if (!membership.TryGetValue(title, out var list)) { list = new List<int>(); membership[title] = list; }
+                list.Add(ic.Index);
+            }
+        }
+        _membership = membership.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray(), StringComparer.OrdinalIgnoreCase);
+
         // Small pad so adjacent boxes stay distinguishable without fusing into one blob.
         // Kept tiny so vertically-adjacent clusters (dense mode) don't overlap much.
         var clusters = FenceClusterBuilder.Build(
             placed, _provider.IconSpacingX, _provider.IconSpacingY,
-            pad: 2, headerPx: FenceHeader.HeaderPx);
+            pad: 2, headerPx: FenceHeader.HeaderPx,
+            padLeft: _insets.Left, padRight: _insets.Right,
+            padTop: _insets.Top, padBottom: _insets.Bottom,
+            separateOverlaps: false); // boxes must stay on their icons, never pushed away from them
 
-        var (x, y, w, h) = Primary;
-        _window.Render(x, y, w, h, clusters);
-        _window.SetVisible(true);
+        _host.Sync(clusters, FenceHeader.HeaderPx);
+        _host.SetVisible(shown);
         SaveLayout(); // follow manual drags so the final layout persists
+    }
+
+    /// <summary>
+    /// Fences are only shown while the desktop itself (or this app's own settings window) is
+    /// foreground; when a real app takes the foreground the fences hide so they never float over it,
+    /// and they return the instant the user comes back to the desktop.
+    /// </summary>
+    private static bool ShouldShowFences()
+    {
+        var fg = NativeMethods.GetForegroundWindow();
+        if (fg == IntPtr.Zero) return true;
+        NativeMethods.GetWindowThreadProcessId(fg, out var pid);
+        if (pid == Environment.ProcessId) return true; // our own settings window — keep boxes visible after "整理"
+        if (IsShellProcess(pid)) return true;           // desktop, taskbar, Start menu — all explorer.exe
+        // A different process's window: only treat it as "an app covering the desktop" if it is
+        // actually a taskbar-app window (WS_EX_APPWINDOW). Transient/helper windows without that style
+        // must NOT hide the fences, otherwise they vanish for no reason a user can see.
+        long ex = NativeMethods.GetWindowLongPtr(fg, NativeMethods.GWL_EXSTYLE).ToInt64();
+        return (ex & NativeMethods.WS_EX_APPWINDOW) == 0;
+    }
+
+    private static bool IsShellProcess(int pid)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(pid);
+            return string.Equals(p.ProcessName, "explorer", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Forces a full redraw on the next refresh, bypassing the idle-skip, so live settings edits
+    /// (box insets) immediately reshape the boxes even though no icon moved.
+    /// </summary>
+    public void ForceRefresh()
+    {
+        _lastIcons = new Dictionary<int, PointI>();
+        _lastShown = !_lastShown;
+        RefreshOverlay();
     }
 
     /// <summary>
@@ -169,7 +274,7 @@ public sealed class FenceOverlayController : IDisposable
         var saved = DesktopLayoutStore.Load(LayoutFilePath);
         if (saved.Count == 0)
         {
-            _window.SetVisible(false);
+            _host.SetVisible(false);
             MessageBox.Show(
                 "还没有保存的布局。\n请先点击「整理并显示分组」生成一组，再在桌面上手动微调当前位置——调整会被自动记住。",
                 "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -243,6 +348,10 @@ public sealed class FenceOverlayController : IDisposable
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "layout.json");
 
+    private static string FenceInsetFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "fence-inset.json");
+
     /// <summary>
     /// Persists the desktop's current icon positions. Best-effort: a transient failure is
     /// ignored rather than surfaced. Only writes when the layout actually changed so the
@@ -264,6 +373,23 @@ public sealed class FenceOverlayController : IDisposable
         }
     }
 
+    private static Dictionary<int, PointI> IconPositions(IEnumerable<DesktopIcon> icons)
+    {
+        var m = new Dictionary<int, PointI>();
+        foreach (var i in icons) m[i.Index] = i.Position;
+        return m;
+    }
+
+    private static bool SamePos(IReadOnlyDictionary<int, PointI> a, IReadOnlyDictionary<int, PointI> b)
+    {
+        if (a.Count != b.Count) return false;
+        foreach (var kv in a)
+        {
+            if (!b.TryGetValue(kv.Key, out var pos) || pos != kv.Value) return false;
+        }
+        return true;
+    }
+
     private static bool Same(IReadOnlyDictionary<string, PointI> a, IReadOnlyDictionary<string, PointI> b)
     {
         if (a.Count != b.Count) return false;
@@ -274,9 +400,54 @@ public sealed class FenceOverlayController : IDisposable
         return true;
     }
 
+    // --- fence dragging: translate the cluster's real icons with the box ---
+
+    private void OnDragStarted(string title)
+    {
+        if (!_membership.TryGetValue(title, out var indexes)) return;
+        _dragging = true;
+        try
+        {
+            var byIndex = _provider.GetIcons().ToDictionary(ic => ic.Index);
+            _dragStart = new Dictionary<int, PointI>();
+            foreach (var idx in indexes)
+                if (byIndex.TryGetValue(idx, out var ic)) _dragStart[idx] = ic.Position;
+        }
+        catch (Exception)
+        {
+            _dragStart = new Dictionary<int, PointI>();
+        }
+    }
+
+    private void OnDragMoved(string title, int dx, int dy)
+    {
+        if (_dragStart.Count == 0) return;
+        var (_, _, sw, sh) = Primary;
+        var spacingX = _provider.IconSpacingX;
+        var spacingY = _provider.IconSpacingY;
+        foreach (var (idx, start) in _dragStart)
+        {
+            var x = Math.Clamp(start.X + dx, LayoutMargin, Math.Max(LayoutMargin, sw - spacingX));
+            var y = Math.Clamp(start.Y + dy, LayoutMargin, Math.Max(LayoutMargin, sh - spacingY));
+            _provider.SetPosition(idx, new PointI(x, y));
+        }
+    }
+
+    private void OnDragEnded(string title)
+    {
+        _dragging = false;
+        _dragStart = new Dictionary<int, PointI>();
+        SaveLayout();
+        // The box already followed the icons during the drag, so don't re-derive (and possibly
+        // re-push) every box from scratch here — that's what moved the OTHER fences around. Record
+        // the post-drag positions so the 2s tick sees no change and leaves every box alone.
+        _lastIcons = IconPositions(_provider.GetIcons());
+    }
+
     public void Dispose()
     {
         _timer.Stop();
+        _host.Dispose();
         _provider.Dispose();
     }
 }

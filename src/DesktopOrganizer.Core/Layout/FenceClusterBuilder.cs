@@ -35,8 +35,17 @@ public static class FenceClusterBuilder
     /// ordering if a stable layout matters.</remarks>
     public static IReadOnlyList<FenceCluster> Build(
         IEnumerable<(string Group, PointI Position)> placed,
-        int cellWidth, int cellHeight, int pad = 8, int headerPx = 0)
+        int cellWidth, int cellHeight, int pad = 8, int headerPx = 0,
+        int padLeft = int.MinValue, int padRight = int.MinValue, int padTop = int.MinValue, int padBottom = int.MinValue,
+        bool separateOverlaps = true)
     {
+        // Per-side padding: int.MinValue is the sentinel meaning "use pad". Any real value — including
+        // negatives (shrink that edge of the box) — is honored as-is on that edge without touching the others.
+        int left = padLeft == int.MinValue ? pad : padLeft;
+        int right = padRight == int.MinValue ? pad : padRight;
+        int top = padTop == int.MinValue ? pad : padTop;
+        int bottom = padBottom == int.MinValue ? pad : padBottom;
+
         var list = placed.Select(x => (x.Group, x.Position)).ToList();
         var clusters = new List<FenceCluster>();
         if (list.Count == 0) return clusters;
@@ -54,23 +63,28 @@ public static class FenceClusterBuilder
             var maxX = pts.Max(p => p.X);
             var maxY = pts.Max(p => p.Y);
             var bounds = new RectI(
-                minX - pad, minY - pad - headerPx,
-                (maxX + cellWidth + pad) - (minX - pad),
-                (maxY + cellHeight + pad) - (minY - pad) + headerPx);
+                minX - left, minY - top - headerPx,
+                (maxX + cellWidth + right) - (minX - left),
+                (maxY + cellHeight + bottom) - (minY - top) + headerPx);
 
             // Bounding boxes can overlap (adjacent kinds sharing an edge, or a gap row sacrificed
             // under height pressure). Keep clusters GroupBy order (软件/文件夹/... first-seen = top),
-            // and push this cluster straight down until it is clear of every earlier box.
-            var changed = true;
-            while (changed)
+            // and push this cluster straight down until it is clear of every earlier box. This ONLY
+            // makes sense for a packer; when boxes are derived from already-placed icons (our render
+            // path) pushing the box away dislocates it from its own icons, so it switches off.
+            if (separateOverlaps)
             {
-                changed = false;
-                foreach (var prior in clusters)
+                var changed = true;
+                while (changed)
                 {
-                    if (Intersects(bounds, prior.Bounds))
+                    changed = false;
+                    foreach (var prior in clusters)
                     {
-                        bounds = new RectI(bounds.X, prior.Bounds.Bottom + MinGap, bounds.Width, bounds.Height);
-                        changed = true;
+                        if (Intersects(bounds, prior.Bounds))
+                        {
+                            bounds = new RectI(bounds.X, prior.Bounds.Bottom + MinGap, bounds.Width, bounds.Height);
+                            changed = true;
+                        }
                     }
                 }
             }
