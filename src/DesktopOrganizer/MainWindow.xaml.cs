@@ -202,7 +202,10 @@ public partial class MainWindow : Window
     private void BuildInsetSection()
     {
         InsetSection.Children.Clear();
-        InsetSection.Children.Add(BuildSortRow());
+        // The sort dropdown lives in its own sub-group panel (SortSection) so the page can label
+        // 图标排序 / 边距 separately instead of one undifferentiated list.
+        SortSection.Children.Clear();
+        SortSection.Children.Add(BuildSortRow());
         var b = _overlay.BoxInsets;
         InsetSection.Children.Add(BuildInsetRow("左边距", b.Left, v => { _overlay.BoxInsets = _overlay.BoxInsets with { Left = v }; FlashSaved(); }));
         InsetSection.Children.Add(BuildInsetRow("右边距", b.Right, v => { _overlay.BoxInsets = _overlay.BoxInsets with { Right = v }; FlashSaved(); }));

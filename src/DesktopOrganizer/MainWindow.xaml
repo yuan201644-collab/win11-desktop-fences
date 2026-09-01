@@ -5,7 +5,108 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:DesktopOrganizer"
         mc:Ignorable="d"
-        Title="桌面图标整理" Height="700" Width="820">
+        FontFamily="Segoe UI, Microsoft YaHei UI"
+        Title="桌面图标整理" Height="660" Width="820">
+    <Window.Resources>
+        <!-- Top strip = Win11 "static tab" (Pivot) pattern: Microsoft's guidance reserves this for
+             settings surfaces with a fixed, predefined set of sections; TabView is explicitly for
+             document tabs (open/close/reorder) and is deliberately not used here. Visual language:
+             borderless headers, selected item in primary text with a 2px accent indicator bar. -->
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF0067C0" />
+        <SolidColorBrush x:Key="TabTextBrush" Color="#FF616161" />
+        <SolidColorBrush x:Key="TabTextActiveBrush" Color="#FF1B1B1B" />
+        <SolidColorBrush x:Key="HairlineBrush" Color="#22000000" />
+        <SolidColorBrush x:Key="HintTextBrush" Color="#FF666666" />
+
+        <Style x:Key="SectionCard" TargetType="Border">
+            <Setter Property="Padding" Value="12,10,12,10" />
+            <Setter Property="BorderBrush" Value="{StaticResource HairlineBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,2" />
+        </Style>
+
+        <Style x:Key="SectionHint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource HintTextBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+
+        <!-- Sub-group heading inside a page (e.g. 排序 / 边距 under 框边距). -->
+        <Style x:Key="SubGroupTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#FF333333" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="PivotTabItem" TargetType="TabItem">
+            <Setter Property="Padding" Value="14,9,14,9" />
+            <Setter Property="Margin" Value="0,0,2,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="{StaticResource TabTextBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Grid Background="Transparent" SnapsToDevicePixels="True">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <ContentPresenter Grid.Row="0" ContentSource="Header" RecognizesAccessKey="True"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                            <!-- Selection indicator: 2px accent bar, centred under the label. -->
+                            <Border x:Name="Indicator" Grid.Row="1" Width="28" Height="2" CornerRadius="1"
+                                    HorizontalAlignment="Center" Background="{StaticResource AccentBrush}"
+                                    Opacity="0" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource TabTextActiveBrush}" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter TargetName="Indicator" Property="Opacity" Value="1" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource TabTextActiveBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PivotTabControl" TargetType="TabControl">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="ItemContainerStyle" Value="{StaticResource PivotTabItem}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <DockPanel KeyboardNavigation.TabNavigation="Local">
+                            <!-- Hairline under the strip separates it from the page body. -->
+                            <Border DockPanel.Dock="Top" BorderBrush="{StaticResource HairlineBrush}"
+                                    BorderThickness="0,0,0,1" SnapsToDevicePixels="True">
+                                <TabPanel IsItemsHost="True" Margin="4,0,0,0" Background="Transparent" />
+                            </Border>
+                            <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" />
+                        </DockPanel>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -13,58 +114,78 @@
         </Grid.RowDefinitions>
 
         <!-- Actions + the transient "已保存" hint. -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="12,12,12,8">
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="12,12,12,10">
             <Button Name="GroupButton" Content="整理并显示分组" Click="GroupButton_Click" Padding="10,4,10,4" />
             <Button Name="RestoreButton" Content="恢复上次布局" Click="RestoreButton_Click" Padding="10,4,10,4" Margin="8,0,0,0" />
             <TextBlock x:Name="SavedHint" Text="已保存" FontSize="13" Foreground="#2E7D32" FontWeight="SemiBold"
                        VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed" />
         </StackPanel>
 
-        <!-- Every settings block lives in one scroll column, so adding a section never pushes
-             the rest off the bottom of a fixed-height window. -->
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                      Margin="12,0,12,12">
-            <StackPanel>
-                <!-- Fence color tuning; rows are built in code-behind (one per OverlayAppearance channel). -->
-                <Border Padding="10,10,10,8" Margin="0,0,0,10" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
-                    <StackPanel>
-                        <TextBlock Text="配色" FontWeight="SemiBold" Margin="0,0,0,6" />
-                        <StackPanel x:Name="ColorSection" />
-                    </StackPanel>
-                </Border>
+        <!-- One page per settings area, switched from the top strip: 配色 / 框边距 / 分类显示 /
+             分组规则. Each page owns its own scroll region, so a long section can never push
+             another one off the bottom of a fixed-height window. -->
+        <TabControl Grid.Row="1" Style="{StaticResource PivotTabControl}" Margin="12,0,12,12">
 
-                <!-- Box edge padding (how far each box edge sits outside its icons) + in-fence ordering. -->
-                <Border Padding="10,10,10,8" Margin="0,0,0,10" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
-                    <StackPanel>
-                        <TextBlock Text="框边距与排序" FontWeight="SemiBold" Margin="0,0,0,6" />
-                        <StackPanel x:Name="InsetSection" />
-                    </StackPanel>
-                </Border>
+            <!-- Color channels of the fence boxes; rows are built in code-behind. -->
+            <TabItem Header="配色">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <TextBlock Text="配色" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="点色块选颜色，拖动滑杆调透明度。改动即时应用到桌面上的分类框并自动保存。"
+                                       Style="{StaticResource SectionHint}" />
+                            <StackPanel x:Name="ColorSection" />
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+            </TabItem>
 
-                <!-- Category manager: which boxes are drawn, and in what order. -->
-                <Border Padding="10,10,10,8" Margin="0,0,0,10" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
-                    <StackPanel>
-                        <TextBlock Text="分类显示" FontWeight="SemiBold" Margin="0,0,0,2" />
-                        <TextBlock Text="取消勾选即隐藏该框（图标位置不动）；上下箭头调整框的排列顺序。"
-                                   FontSize="12" Foreground="#666666" Margin="0,0,0,6" />
-                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <!-- In-fence ordering + how far each box edge sits outside its icons. -->
+            <TabItem Header="框边距">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <TextBlock Text="框边距" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="决定分类框相对框内图标的范围；改动即时生效并自动保存。"
+                                       Style="{StaticResource SectionHint}" />
+                            <TextBlock Text="图标排序" Style="{StaticResource SubGroupTitle}" />
+                            <StackPanel x:Name="SortSection" />
+                            <TextBlock Text="边距" Style="{StaticResource SubGroupTitle}" Margin="0,12,0,4" />
+                            <TextBlock Text="每条边向外扩展的距离；负值向内收缩。"
+                                       Style="{StaticResource SectionHint}" />
+                            <StackPanel x:Name="InsetSection" />
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Category manager: which boxes are drawn, and in what order. -->
+            <TabItem Header="分类显示">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <TextBlock Text="分类显示" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="取消勾选即隐藏该框（图标位置不动）；上下箭头调整框的排列顺序。"
+                                       Style="{StaticResource SectionHint}" />
                             <StackPanel x:Name="CategorySection" />
-                        </ScrollViewer>
-                    </StackPanel>
-                </Border>
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+            </TabItem>
 
-                <!-- Rule editor: list/edit the purpose boxes and their keywords. -->
-                <Border Padding="10,10,10,8" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
-                    <StackPanel>
-                        <TextBlock Text="分组规则" FontWeight="SemiBold" Margin="0,0,0,2" />
-                        <TextBlock Text="关键字用逗号分隔；命中的快捷方式会归入该框。"
-                                   FontSize="12" Foreground="#666666" Margin="0,0,0,6" />
-                        <ScrollViewer MaxHeight="170" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <!-- Rule editor: list/edit the purpose boxes and their keywords. -->
+            <TabItem Header="分组规则">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <TextBlock Text="分组规则" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="关键字用逗号分隔；命中的快捷方式会归入该框。"
+                                       Style="{StaticResource SectionHint}" />
                             <StackPanel x:Name="RuleSection" />
-                        </ScrollViewer>
-                    </StackPanel>
-                </Border>
-            </StackPanel>
-        </ScrollViewer>
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
     </Grid>
 </Window>
