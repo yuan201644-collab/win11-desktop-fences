@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & test
+    # WPF (net9.0-windows) can only be built and tested on Windows.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore DesktopOrganizer.sln
+
+      # Directory.Build.props sets TreatWarningsAsErrors=true, so any new warning fails here.
+      - name: Build
+        run: dotnet build DesktopOrganizer.sln -c Release --no-restore
+
+      # Regression guard for the startup crash fixed in 87ba9d1:
+      # app.ico was declared as <Resource>app.ico</Resource> inside <PropertyGroup>. That is not a
+      # valid MSBuild item and is dropped silently - no error, no warning, clean build - so the icon
+      # never reached the WPF resource manifest. MainWindow.xaml resolves
+      # pack://application:,,,/app.ico during XAML parsing, so every launch died with
+      # XamlParseException before the window could be constructed.
+      # MSBuild cannot catch this for us, so assert the declaration explicitly.
+      - name: Verify app.ico declared as WPF resource
+        shell: pwsh
+        run: |
+          $xml = New-Object System.Xml.XmlDocument
+          $xml.Load("src/DesktopOrganizer/DesktopOrganizer.csproj")
+          $hits = $xml.SelectNodes("//ItemGroup/Resource[@Include='app.ico']")
+          if ($hits.Count -ne 1) {
+            Write-Error "app.ico must be declared as <Resource Include='app.ico' /> inside an <ItemGroup> (found $($hits.Count)). A <Resource> placed in <PropertyGroup> is silently dropped by MSBuild and makes the app crash at startup."
+            exit 1
+          }
+          Write-Host "OK: app.ico is declared as a WPF resource."
+
+      - name: Test
+        run: dotnet test DesktopOrganizer.sln -c Release --no-build --nologo
