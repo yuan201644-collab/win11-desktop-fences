@@ -773,13 +773,13 @@ public sealed class FenceOverlayController : IDisposable
     /// <summary>A stable, UNIQUE key for an icon: its file path (survives renames, and two icons
     /// with the same display name but different paths stay distinct). Shell items without a path
     /// fall back to their display name.</summary>
-    private static string StableKey(DesktopIcon ic) =>
+    internal static string StableKey(DesktopIcon ic) =>
         string.IsNullOrEmpty(ic.Path) ? "name:" + ic.Name : "path:" + ic.Path;
 
     /// <summary>Builds an icon lookup keyed by <see cref="StableKey"/>. Never throws on duplicate
     /// display names — the first occurrence wins — which is exactly what used to crash ExpandRestore
     /// via <c>ToDictionary(ic =&gt; ic.Name)</c>.</summary>
-    private static Dictionary<string, DesktopIcon> BuildKeyIndex(IEnumerable<DesktopIcon> icons)
+    internal static Dictionary<string, DesktopIcon> BuildKeyIndex(IEnumerable<DesktopIcon> icons)
     {
         var dict = new Dictionary<string, DesktopIcon>(StringComparer.OrdinalIgnoreCase);
         foreach (var ic in icons)
