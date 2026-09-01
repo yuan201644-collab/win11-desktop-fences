@@ -45,7 +45,7 @@
 
 **方式一：直接用现成的软件**（无需装任何环境）
 
-1. 到 **[Releases](../../releases/latest)** 下载 `DesktopOrganizer.exe`；
+1. 到 **[Releases](../../releases/latest)**（当前最新 **v1.1.0**）下载 `DesktopOrganizer.exe`；
 2. 双击运行（首次运行 Windows SmartScreen 可能提示"未知发布者"，点 **更多信息 → 仍要运行**）；
 3. 桌面右键取消勾选「自动排列图标」；
 4. 回到程序点「**整理并显示分组**」——搞定。
