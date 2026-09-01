@@ -43,6 +43,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // Surface the build identity in the title bar so it's obvious at a glance which version is
+        // running — the project has repeatedly wasted cycles on the user launching a stale exe.
+        Title = $"桌面图标整理 · {LoadVersion()}";
         _overlay = new FenceOverlayController();
 
         // Pull the last-saved fence palette into the live overlay, then build the color rows.
@@ -70,6 +73,25 @@ public partial class MainWindow : Window
         _tray.DoubleClick += (_, _) => ShowFromTray();
         _tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) ShowFromTray(); };
         Closing += OnClosing;
+    }
+
+    /// <summary>Build identity for the title bar: prefers the VERSION.txt written at publish time
+    /// (git hash + timestamp); falls back to the exe's last-write time so a debug build still shows
+    /// something identifiable.</summary>
+    private static string LoadVersion()
+    {
+        try
+        {
+            var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (exe is not null)
+            {
+                var v = Path.Combine(Path.GetDirectoryName(exe)!, "VERSION.txt");
+                if (File.Exists(v)) return File.ReadAllText(v).Trim();
+                return "build " + File.GetLastWriteTime(exe).ToString("MM-dd HH:mm");
+            }
+        }
+        catch { /* best-effort */ }
+        return "unknown";
     }
 
     private void ShowFromTray()
