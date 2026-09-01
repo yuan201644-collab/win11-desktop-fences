@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -37,6 +38,41 @@ public static class FenceClusterBuilder
     /// Shared threshold with the controller's RescueStrandedIcons.
     /// </summary>
     public const int ParkedThreshold = -10000;
+
+    /// <summary>Base of the off-screen parking pocket: far outside any virtual desktop, yet close
+    /// enough to zero that an entire box of icons still fits inside the signed 16-bit range that
+    /// <c>LVM_SETITEMPOSITION</c> can carry (see <see cref="ParkSlot"/>).</summary>
+    public const int ParkBase = -32000;
+
+    /// <summary>How far (px) the parking pocket may extend from <see cref="ParkBase"/>. Keeps every
+    /// parked coordinate above <c>short.MinValue</c> (-32768) with room to spare.</summary>
+    private const int ParkSpan = 700;
+
+    /// <summary>
+    /// The off-screen cell for the <paramref name="slot"/>-th parked icon of a collapsed box.
+    /// <para>
+    /// Must stay inside the signed 16-bit range. <c>LVM_SETITEMPOSITION</c> packs x/y into two
+    /// 16-bit words, so the previous <c>-32000 - spacing * i</c> scheme was silently truncated as
+    /// soon as a box held enough icons to march past -32768 (a 30-icon box reached -34352, which
+    /// Explorer read back as <c>+31184</c> — log: <c>dropped 1 off-screen icon(s): 文件夹@-34128,31184</c>).
+    /// That stranded the icon off-screen AND poisoned the collapsed tab's bounding box, taking box
+    /// and icons off-screen together — the "folder box vanishes after collapse→expand→collapse" bug.
+    /// </para>
+    /// Slots now spread over a bounded 2-D grid instead of marching toward -∞, so any icon count
+    /// stays representable.
+    /// </summary>
+    public static PointI ParkSlot(int slot, int cellWidth, int cellHeight)
+    {
+        int sx = Math.Clamp(cellWidth, 1, ParkSpan);
+        int sy = Math.Clamp(cellHeight, 1, ParkSpan);
+        int cols = Math.Max(1, ParkSpan / sx);
+        int i = Math.Max(0, slot);
+        // Offsets are capped — not wrapped — so a huge box can never escape the pocket. Two icons
+        // sharing the last row is harmless: restoring is keyed by each icon's stable path key.
+        int dx = Math.Min((i % cols) * sx, ParkSpan);
+        int dy = Math.Min((i / cols) * sy, ParkSpan);
+        return new PointI(ParkBase + dx, ParkBase + dy);
+    }
 
     /// <param name="placed">Icon anchors, each tagged with its cluster group title.</param>
     /// <param name="cellWidth">Icon cell width in px (e.g. <c>IconSpacingX</c>).</param>

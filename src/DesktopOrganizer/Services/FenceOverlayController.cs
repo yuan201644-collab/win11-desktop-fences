@@ -420,8 +420,11 @@ public sealed class FenceOverlayController : IDisposable
         {
             if (!BoxOrder.Contains(title, StringComparer.OrdinalIgnoreCase)) continue;
             if (!_tabBounds.TryGetValue(title, out var tab)) continue;
+            // Also guards tab rects restored from disk (a box saved while poisoned by a truncated
+            // park coordinate would otherwise come back off-screen and look like it vanished).
+            var safeTab = ReachableTab(tab, screen);
             clusters.Add(new FenceCluster(
-                title, 0, new RectI(tab.X, tab.Y, Math.Max(24, tab.Width), Math.Max(1, tab.Height))));
+                title, 0, new RectI(safeTab.X, safeTab.Y, Math.Max(24, safeTab.Width), Math.Max(1, safeTab.Height))));
         }
 
         _host.Sync(clusters, FenceHeader.HeaderPx);
@@ -619,11 +622,12 @@ public sealed class FenceOverlayController : IDisposable
         {
             try
             {
-                // Park the real icon far off the virtual desktop (base -32000 keeps every monitor,
-                // including secondary displays to the left of the primary, fully off-screen). Each
-                // icon gets its own cell so the ListView never merges them; expanding restores the
-                // exact pre-collapse position from _hiddenIcons.
-                _provider.SetPosition(ic.Index, new PointI(-32000 - sx * i, -32000 - sy * i));
+                // Park the real icon far off the virtual desktop. Slots come from ParkSlot, which
+                // spreads them over a bounded grid INSIDE the signed 16-bit range — the old
+                // `-32000 - spacing * i` marched past -32768 once a box held enough icons, and
+                // LVM_SETITEMPOSITION truncated the coordinate into a bogus on-screen-looking
+                // value that later poisoned the tab's bounding box (box + icons vanished together).
+                _provider.SetPosition(ic.Index, FenceClusterBuilder.ParkSlot(i, sx, sy));
             }
             catch (Exception ex)
             {
@@ -647,9 +651,39 @@ public sealed class FenceOverlayController : IDisposable
     /// it), and expanding snapped it back: "折叠时标题框会移动，展开之后又会回去".
     /// </remarks>
     private RectI TabBounds(IReadOnlyList<DesktopIcon> icons, int cellW, int cellH)
-        => FenceClusterBuilder.CollapsedTabBounds(
-            icons.Select(ic => ic.Position).ToList(), cellW, cellH,
+    {
+        var pts = icons.Select(ic => ic.Position).ToList();
+        // Only on-screen positions may shape the tab. A single icon left at a bogus coordinate
+        // (a truncated 16-bit park position, e.g. y=+31184) would drag the bounding box — and with
+        // it the tab, the box's ONLY way back — off the screen. Filter first, then clamp.
+        var screen = VirtualScreen();
+        var safe = screen is { } sc
+            ? pts.Where(p => FenceClusterBuilder.IsOnScreen(p, sc, cellW, cellH)).ToList()
+            : pts.Where(p => p.X > FenceClusterBuilder.ParkedThreshold
+                             && p.Y > FenceClusterBuilder.ParkedThreshold).ToList();
+        if (safe.Count == 0) safe = pts; // nothing on screen to anchor to — keep every point rather than lose the tab
+        var tab = FenceClusterBuilder.CollapsedTabBounds(
+            safe, cellW, cellH,
             _insets.Left, _insets.Top, _insets.Right, _insets.Bottom, FenceHeader.HeaderPx);
+        return ReachableTab(tab, screen);
+    }
+
+    /// <summary>Guarantees a collapsed tab the user can actually click. A tab drawn outside the
+    /// virtual desktop is indistinguishable from "the box vanished", so any rect that would land
+    /// off-screen is pulled back onto it — the box stays reachable and the parked icons can always
+    /// be restored. No-op for healthy geometry.</summary>
+    private RectI ReachableTab(RectI tab, RectI? screen)
+    {
+        if (screen is not { } sc) return tab;
+        int w = Math.Min(Math.Max(24, tab.Width), Math.Max(24, sc.Width));
+        int h = Math.Min(Math.Max(1, tab.Height), Math.Max(1, sc.Height));
+        int x = Math.Clamp(tab.Left, sc.Left, Math.Max(sc.Left, sc.Right - w));
+        int y = Math.Clamp(tab.Top, sc.Top, Math.Max(sc.Top, sc.Bottom - h));
+        if (x == tab.Left && y == tab.Top && w == tab.Width && h == tab.Height) return tab;
+        TraceLog($"[collapse] tab @{tab.Left},{tab.Top} {tab.Width}x{tab.Height} would be off-screen → "
+                 + $"clamped to @{x},{y} so the box stays reachable");
+        return new RectI(x, y, w, h);
+    }
 
     /// <summary>
     /// Re-parks icons of collapsed fences that the shell bounced back into the visible desktop
@@ -670,7 +704,8 @@ public sealed class FenceOverlayController : IDisposable
                 if (!originals.ContainsKey(StableKey(ic))) continue;
                 if (ic.Position.X > -10000 || ic.Position.Y > -10000)
                 {
-                    try { _provider.SetPosition(ic.Index, new PointI(-32000 - sx * i, -32000 - sy * i)); }
+                    // Same bounded parking pocket as CollapseHide — never `-32000 - spacing * i`.
+                    try { _provider.SetPosition(ic.Index, FenceClusterBuilder.ParkSlot(i, sx, sy)); }
                     catch (Exception) { /* best-effort — next tick retries */ }
                 }
                 i++;
@@ -923,8 +958,17 @@ public sealed class FenceOverlayController : IDisposable
             foreach (var kv in _hiddenIcons)
                 foreach (var key in kv.Value.Keys) intentional.Add(key);
 
+            // Stranded means ANY coordinate off the monitors — not just the classic negative park
+            // zone. A coordinate truncated by LVM_SETITEMPOSITION's 16-bit packing can come back as
+            // a large POSITIVE value (e.g. y=+31184), which the old negative-only test never caught,
+            // leaving that icon invisible forever.
+            var screen = VirtualScreen();
+            int cw = Math.Max(1, _provider.IconSpacingX);
+            int chh = Math.Max(1, _provider.IconSpacingY);
             var parked = _provider.GetIcons()
-                .Where(ic => ic.Position.X < -10000 || ic.Position.Y < -10000)
+                .Where(ic => ic.Position.X < FenceClusterBuilder.ParkedThreshold
+                          || ic.Position.Y < FenceClusterBuilder.ParkedThreshold
+                          || (screen is { } s && !FenceClusterBuilder.IsOnScreen(ic.Position, s, cw, chh)))
                 .ToList();
             if (parked.Count == 0) return;
 

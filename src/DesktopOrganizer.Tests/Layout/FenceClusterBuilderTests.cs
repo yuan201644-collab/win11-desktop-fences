@@ -212,6 +212,62 @@ public class FenceClusterBuilderTests
         Assert.Equal(box.Width, tab.Width);
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Parking pockets (LVM_SETITEMPOSITION packs coordinates into 16-bit words — see ParkSlot).
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ParkSlot_StaysInside16BitRange_EvenForAHugeBox()
+    {
+        // The old `-32000 - spacing * i` marched past short.MinValue and got truncated by Explorer
+        // into a bogus positive coordinate. Any icon count must stay representable.
+        for (int slot = 0; slot < 5000; slot++)
+        {
+            var p = FenceClusterBuilder.ParkSlot(slot, 96, 96);
+            Assert.InRange(p.X, short.MinValue, short.MaxValue);
+            Assert.InRange(p.Y, short.MinValue, short.MaxValue);
+        }
+    }
+
+    [Fact]
+    public void ParkSlot_AlwaysFarOffScreen()
+    {
+        // Parked icons must be invisible AND detectable by the stranded-icon rescue.
+        for (int slot = 0; slot < 500; slot++)
+        {
+            var p = FenceClusterBuilder.ParkSlot(slot, 76, 84);
+            Assert.True(p.X < FenceClusterBuilder.ParkedThreshold, $"slot {slot}: x={p.X} not far off-screen");
+            Assert.True(p.Y < FenceClusterBuilder.ParkedThreshold, $"slot {slot}: y={p.Y} not far off-screen");
+        }
+    }
+
+    [Fact]
+    public void ParkSlot_Regression_ThirtyIconFolderBoxNeverWraps()
+    {
+        // The exact repro: a 30-icon 文件夹 box parked with the live 76x84 icon grid. The old scheme
+        // reached y = -32000 - 84*28 = -34352, which Explorer read back as +31184 (0x79D0) —
+        // log line: "dropped 1 off-screen icon(s): 文件夹@-34128,31184".
+        for (int slot = 0; slot < 30; slot++)
+        {
+            var p = FenceClusterBuilder.ParkSlot(slot, 76, 84);
+            Assert.InRange(p.X, short.MinValue, short.MaxValue);
+            Assert.InRange(p.Y, short.MinValue, short.MaxValue);
+            Assert.True(p.Y < FenceClusterBuilder.ParkedThreshold);
+            // The old formula, for contrast, is what broke:
+            var oldY = -32000 - 84 * slot;
+            if (slot >= 28) Assert.True(oldY < short.MinValue, "the old scheme did overflow — regression guard");
+        }
+    }
+
+    [Fact]
+    public void ParkSlot_SpreadsSmallBoxesOverDistinctCells()
+    {
+        var cells = new HashSet<(int, int)>();
+        for (int slot = 0; slot < 12; slot++) cells.Add((FenceClusterBuilder.ParkSlot(slot, 96, 96).X,
+                                                        FenceClusterBuilder.ParkSlot(slot, 96, 96).Y));
+        Assert.Equal(12, cells.Count); // no two parked icons share a cell in the normal case
+    }
+
     private static bool Overlaps(RectI x, RectI y)
         => x.Left < y.Right && x.Right > y.Left && x.Top < y.Bottom && x.Bottom > y.Top;
 }

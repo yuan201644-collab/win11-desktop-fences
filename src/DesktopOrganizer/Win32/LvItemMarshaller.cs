@@ -59,10 +59,29 @@ internal sealed class LvItemMarshaller : IDisposable
         // - 0x100F + POINT*：Explorer 把 lParam 当"打包坐标"拆（图标落点 = 指针地址高16位），
         //   证明桌面 listview 对 0x100F 的语义就是 lParam=MAKELPARAM(x,y)（非文档的 POINT*）
         // 因此正确用法：0x100F + 打包坐标。
-        var lp = (IntPtr)((y << 16) | (x & 0xFFFF)); // MAKELPARAM(x, y)
+        //
+        // ★ 16 位限制（"文件夹框折叠→展开→再折叠整框消失"的根因）：
+        //   LVM_SETITEMPOSITION 把坐标打包进两个 16 位字，任何超出 [-32768, 32767] 的坐标都会被
+        //   Explorer 静默截断成低 16 位。旧停靠公式 -32000 - spacing*i 在图标数够多时冲过 -32768
+        //   （30 个图标算到 -34352，被读回成 +31184）：图标既回不到原位，又把折叠 tab 的包围盒
+        //   撑到屏外，框和图标一起消失。打包前先把坐标夹回 int16 —— 宁可落在夹取值，也绝不让
+        //   一个坐标被截断成垃圾坐标。
+        var lp = MakeLParam(x, y);
         var result = Send(listView, NativeMethods.LVM_SETITEMPOSITION, (IntPtr)index, lp);
         if (result == IntPtr.Zero)
             throw new InvalidOperationException($"LVM_SETITEMPOSITION returned FALSE (Explorer refused) for index {index}");
+    }
+
+    /// <summary>Packs a target position into the 16-bit <c>MAKELPARAM</c> that LVM_SETITEMPOSITION
+    /// expects, clamping each axis into the signed 16-bit range first so an out-of-range coordinate
+    /// can never be silently truncated into a bogus one (see the 16-bit note on
+    /// <see cref="SetItemPosition"/>). Callers stay responsible for asking for reachable positions
+    /// (<see cref="FenceClusterBuilder.ParkSlot"/> does); this is the last line of defense.</summary>
+    internal static IntPtr MakeLParam(int x, int y)
+    {
+        int cx = x < short.MinValue ? short.MinValue : x > short.MaxValue ? short.MaxValue : x;
+        int cy = y < short.MinValue ? short.MinValue : y > short.MaxValue ? short.MaxValue : y;
+        return (IntPtr)unchecked((int)(((uint)(ushort)cy << 16) | (ushort)cx));
     }
 
     private SafeRemoteBufferHandle Alloc(IntPtr size)
