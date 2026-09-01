@@ -44,11 +44,14 @@ public static class FenceClusterBuilder
     /// <param name="pad">Extra px around each cluster so the box doesn't touch icons.</param>
     /// <remarks>Groups keep their first-seen order; pass items grouped by your intended
     /// ordering if a stable layout matters.</remarks>
+    /// <param name="screen">When given, the virtual desktop rect: icons lying entirely outside it
+    /// (fold-parked at -32000, or stranded at any bogus coordinate) are dropped before the box is
+    /// computed, so one stray point can never stretch a box — and its title bar — off-screen.</param>
     public static IReadOnlyList<FenceCluster> Build(
         IEnumerable<(string Group, PointI Position)> placed,
         int cellWidth, int cellHeight, int pad = 8, int headerPx = 0,
         int padLeft = int.MinValue, int padRight = int.MinValue, int padTop = int.MinValue, int padBottom = int.MinValue,
-        bool separateOverlaps = true)
+        bool separateOverlaps = true, RectI? screen = null)
     {
         // Per-side padding: int.MinValue is the sentinel meaning "use pad". Any real value — including
         // negatives (shrink that edge of the box) — is honored as-is on that edge without touching the others.
@@ -67,6 +70,16 @@ public static class FenceClusterBuilder
         // after explorer applies the restored positions, draws them back into the box.
         list.RemoveAll(p => p.Position.X < ParkedThreshold || p.Position.Y < ParkedThreshold);
         if (list.Count == 0) return clusters;
+
+        // Second guard, screen-relative: catches stray coordinates in BOTH directions — a parked
+        // icon at -32000 as well as anything dumped far to the right/below the monitors. Only a
+        // cell with no overlap at all with the virtual desktop is dropped, so icons sitting on a
+        // secondary monitor (legitimately negative, e.g. x=-1920) always survive.
+        if (screen is { } sc)
+        {
+            list.RemoveAll(p => !IsOnScreen(p.Position, sc, cellWidth, cellHeight));
+            if (list.Count == 0) return clusters;
+        }
 
         // Minimum vertical separation between adjacent boxes so they never fuse into one blob,
         // even when the desktop grid packer was forced to drop its kind-gap rows (dense/1080p).
@@ -110,6 +123,25 @@ public static class FenceClusterBuilder
             clusters.Add(new FenceCluster(group.Key, pts.Count, bounds));
         }
         return clusters;
+    }
+
+    /// <summary>True when an icon cell anchored at <paramref name="pos"/> overlaps the virtual
+    /// desktop at all. Deliberately generous: a cell is kept if any part of it is on a monitor, so
+    /// icons on a secondary screen (which can start at a negative x) are never discarded.</summary>
+    public static bool IsOnScreen(PointI pos, RectI screen, int cellWidth, int cellHeight)
+        => pos.X + cellWidth >= screen.Left && pos.X <= screen.Right
+        && pos.Y + cellHeight >= screen.Top && pos.Y <= screen.Bottom;
+
+    /// <summary>Last-resort cap: shrinks a box that is larger than the whole virtual desktop down
+    /// to the screen. Only ever fires for a coordinate we failed to classify; normal boxes — even
+    /// ones spanning several monitors — are returned untouched.</summary>
+    public static RectI ClampBounds(RectI bounds, RectI screen)
+    {
+        int l = Math.Max(bounds.Left, screen.Left);
+        int t = Math.Max(bounds.Top, screen.Top);
+        int r = Math.Min(bounds.Right, screen.Right);
+        int b = Math.Min(bounds.Bottom, screen.Bottom);
+        return new RectI(l, t, Math.Max(1, r - l), Math.Max(1, b - t));
     }
 
     private static bool Intersects(RectI a, RectI b)

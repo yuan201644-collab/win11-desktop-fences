@@ -348,6 +348,11 @@ public sealed class FenceOverlayController : IDisposable
         positions = IconPositions(icons);
         _lastIcons = positions;
 
+        // Virtual desktop rect: lets the cluster builder drop stray coordinates (fold-parked
+        // icons at -32000, or any icon parked/stranded beyond the monitors) instead of letting
+        // one bad point stretch a box — and the title bar with it — across the whole desktop.
+        var screen = VirtualScreen();
+
         // Group by on-screen box (software split by purpose + folder/file/other), stable order,
         // and remember which ListView indexes each box holds (for dragging). Collapsed boxes are
         // skipped — their icons are parked off-screen; a thin tab is appended below instead.
@@ -367,12 +372,35 @@ public sealed class FenceOverlayController : IDisposable
 
         // Small pad so adjacent boxes stay distinguishable without fusing into one blob.
         // Kept tiny so vertically-adjacent clusters (dense mode) don't overlap much.
+        // Log (only when it actually happens) any icon dropped for sitting outside the virtual
+        // desktop — that is the smoking gun for a box/title bar that stretches off-screen.
+        if (screen is { } sc)
+        {
+            var dropped = placed.Where(p => !FenceClusterBuilder.IsOnScreen(
+                p.Position, sc, _provider.IconSpacingX, _provider.IconSpacingY)).ToList();
+            if (dropped.Count > 0)
+                TraceLog($"[refresh] dropped {dropped.Count} off-screen icon(s): "
+                    + string.Join(", ", dropped.Take(6).Select(p => $"{p.Group}@{p.Position.X},{p.Position.Y}")));
+        }
+
         var clusters = FenceClusterBuilder.Build(
             placed, _provider.IconSpacingX, _provider.IconSpacingY,
             pad: 2, headerPx: FenceHeader.HeaderPx,
             padLeft: _insets.Left, padRight: _insets.Right,
             padTop: _insets.Top, padBottom: _insets.Bottom,
-            separateOverlaps: false).ToList(); // boxes must stay on their icons, never pushed away from them
+            separateOverlaps: false, screen: screen).ToList(); // boxes must stay on their icons, never pushed away from them
+
+        // Last-resort guard: a box larger than the whole virtual desktop can only come from a
+        // coordinate we failed to classify. Cap it and record the anomaly instead of letting the
+        // title bar run off the screen.
+        if (screen is { } sc2)
+            for (int i = 0; i < clusters.Count; i++)
+            {
+                var c = clusters[i];
+                if (c.Bounds.Width <= sc2.Width && c.Bounds.Height <= sc2.Height) continue;
+                TraceLog($"[refresh] CLAMP '{c.Title}' from {c.Bounds.Width}x{c.Bounds.Height} to screen {sc2.Width}x{sc2.Height}");
+                clusters[i] = c with { Bounds = FenceClusterBuilder.ClampBounds(c.Bounds, sc2) };
+            }
 
         // Collapsed boxes produce no clusters above; append one thin tab cluster per collapsed
         // title (drawn at the remembered pre-collapse position) so the tab stays visible/clickable.
@@ -811,6 +839,20 @@ public sealed class FenceOverlayController : IDisposable
             if (!dict.ContainsKey(key)) dict[key] = ic;
         }
         return dict;
+    }
+
+    /// <summary>The virtual desktop rect (all monitors) in screen px, or null if the metrics are
+    /// unavailable. Used to keep stray icon coordinates out of cluster bounding boxes.</summary>
+    private static RectI? VirtualScreen()
+    {
+        try
+        {
+            int w = (int)SystemParameters.VirtualScreenWidth;
+            int h = (int)SystemParameters.VirtualScreenHeight;
+            if (w <= 0 || h <= 0) return null;
+            return new RectI((int)SystemParameters.VirtualScreenLeft, (int)SystemParameters.VirtualScreenTop, w, h);
+        }
+        catch { return null; }
     }
 
     /// <summary>An expand is only "complete" — safe to drop its collapse record — when every icon is

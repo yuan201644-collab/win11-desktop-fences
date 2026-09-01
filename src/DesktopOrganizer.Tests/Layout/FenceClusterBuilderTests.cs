@@ -139,6 +139,46 @@ public class FenceClusterBuilderTests
         Assert.Equal(2, cl.IconCount);
     }
 
+    [Fact]
+    public void ScreenGuard_DropsFarRightCoordinate_KeepsBoxOnScreen()
+    {
+        // The real repro: a coordinate dumped far to the right of the monitors (positive, so the
+        // negative-only parked filter cannot see it) must not stretch the box.
+        var screen = new RectI(0, 0, 1920, 1080);
+        var cl = Assert.Single(FenceClusterBuilder.Build(
+            new[] {
+                ("文件夹", new PointI(846, 28)),
+                ("文件夹", new PointI(942, 28)),
+                ("文件夹", new PointI(50000, 28)),   // stray, far right
+            }, 96, 96, pad: 2, headerPx: 34, separateOverlaps: false, screen: screen));
+        Assert.Equal(2, cl.IconCount);
+        // width = (942+96+2) - 844 = 196; height = (28+96+2) - (28-2) + 34 = 134.
+        Assert.Equal(new RectI(844, -8, 196, 134), cl.Bounds);
+    }
+
+    [Fact]
+    public void IsOnScreen_KeepsSecondaryMonitorNegativeCoords()
+    {
+        var screen = new RectI(-1920, 0, 3840, 1080); // second monitor on the left
+        Assert.True(FenceClusterBuilder.IsOnScreen(new PointI(-1920, 100), screen, 96, 96));
+        Assert.True(FenceClusterBuilder.IsOnScreen(new PointI(-1824, 100), screen, 96, 96));
+        Assert.False(FenceClusterBuilder.IsOnScreen(new PointI(-32000, -32000), screen, 96, 96)); // parked
+        Assert.False(FenceClusterBuilder.IsOnScreen(new PointI(50000, 100), screen, 96, 96));    // stray right
+    }
+
+    [Fact]
+    public void ClampBounds_CapsRunawayBox_LeavesMultiMonitorBoxAlone()
+    {
+        // Dual-monitor virtual desktop: 3840x1080.
+        var screen = new RectI(0, 0, 3840, 1080);
+        // A legitimate box straddling both monitors still fits inside the virtual screen → untouched.
+        var normal = new RectI(846, 28, 1200, 600);
+        Assert.Equal(normal, FenceClusterBuilder.ClampBounds(normal, screen));
+        // A runaway box (32k px wide) gets capped to the screen rect.
+        var runaway = new RectI(846, 28, 32000, 400);
+        Assert.Equal(new RectI(846, 28, 2994, 400), FenceClusterBuilder.ClampBounds(runaway, screen));
+    }
+
     private static bool Overlaps(RectI x, RectI y)
         => x.Left < y.Right && x.Right > y.Left && x.Top < y.Bottom && x.Bottom > y.Top;
 }
