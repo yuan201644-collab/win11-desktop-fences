@@ -58,7 +58,11 @@ public sealed class FenceHost
     /// </summary>
     public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx)
     {
-        var wanted = clusters.ToDictionary(c => c.Title, StringComparer.OrdinalIgnoreCase);
+        // First-wins build: two clusters can never share a title by construction, but a malformed
+        // grouping config could in theory produce duplicates — fail safe (keep the first) rather than
+        // throw ArgumentException and take the whole overlay down.
+        var wanted = new Dictionary<string, FenceCluster>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in clusters) if (!wanted.ContainsKey(c.Title)) wanted[c.Title] = c;
 
         foreach (var (title, win) in _fences.ToList())
         {
