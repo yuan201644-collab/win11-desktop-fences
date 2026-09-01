@@ -89,14 +89,7 @@ public static class FenceClusterBuilder
         {
             var pts = group.Select(p => p.Position).ToList();
             if (pts.Count == 0) continue;
-            var minX = pts.Min(p => p.X);
-            var minY = pts.Min(p => p.Y);
-            var maxX = pts.Max(p => p.X);
-            var maxY = pts.Max(p => p.Y);
-            var bounds = new RectI(
-                minX - left, minY - top - headerPx,
-                (maxX + cellWidth + right) - (minX - left),
-                (maxY + cellHeight + bottom) - (minY - top) + headerPx);
+            var bounds = BoxBounds(pts, cellWidth, cellHeight, left, top, right, bottom, headerPx);
 
             // Bounding boxes can overlap (adjacent kinds sharing an edge, or a gap row sacrificed
             // under height pressure). Keep clusters GroupBy order (软件/文件夹/... first-seen = top),
@@ -123,6 +116,38 @@ public static class FenceClusterBuilder
             clusters.Add(new FenceCluster(group.Key, pts.Count, bounds));
         }
         return clusters;
+    }
+
+    /// <summary>
+    /// Bounding box of one group's icon cells: padded on every side and lifted by the title band.
+    /// Single source of truth for fence geometry — <see cref="Build"/> (the expanded box) and
+    /// <see cref="CollapsedTabBounds"/> (the folded tab) both derive from it, so a box stays exactly
+    /// where its title bar was when it folds instead of jumping.
+    /// </summary>
+    public static RectI BoxBounds(IReadOnlyList<PointI> pts, int cellWidth, int cellHeight,
+        int left, int top, int right, int bottom, int headerPx)
+    {
+        var minX = pts.Min(p => p.X);
+        var minY = pts.Min(p => p.Y);
+        var maxX = pts.Max(p => p.X);
+        var maxY = pts.Max(p => p.Y);
+        return new RectI(
+            minX - left, minY - top - headerPx,
+            (maxX + cellWidth + right) - (minX - left),
+            (maxY + cellHeight + bottom) - (minY - top) + headerPx);
+    }
+
+    /// <summary>
+    /// The tab that replaces a collapsed box: the <em>same</em> rectangle the expanded box would
+    /// occupy, shrunk to title-band height. Because it reuses <see cref="BoxBounds"/>, the tab sits
+    /// exactly on the box's title bar — folding no longer shifts it right (padding) or down
+    /// (padding + header lift) and no longer narrows it.
+    /// </summary>
+    public static RectI CollapsedTabBounds(IReadOnlyList<PointI> pts, int cellWidth, int cellHeight,
+        int left, int top, int right, int bottom, int headerPx)
+    {
+        var box = BoxBounds(pts, cellWidth, cellHeight, left, top, right, bottom, headerPx);
+        return new RectI(box.X, box.Y, box.Width, Math.Max(1, headerPx));
     }
 
     /// <summary>True when an icon cell anchored at <paramref name="pos"/> overlaps the virtual

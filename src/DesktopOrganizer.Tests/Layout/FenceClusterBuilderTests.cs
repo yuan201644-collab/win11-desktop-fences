@@ -179,6 +179,39 @@ public class FenceClusterBuilderTests
         Assert.Equal(new RectI(846, 28, 2994, 400), FenceClusterBuilder.ClampBounds(runaway, screen));
     }
 
+    [Fact]
+    public void CollapsedTab_SitsExactlyOnTheExpandedBoxTitleBar()
+    {
+        // Regression: the tab used its own ad-hoc formula (no padding, no header lift), so folding
+        // kicked the title right/down and narrowed it, and expanding snapped it back.
+        var pts = new[] { new PointI(846, 28), new PointI(942, 28), new PointI(846, 124) };
+        var box = Assert.Single(FenceClusterBuilder.Build(
+            pts.Select(p => ("文件夹", p)).ToArray(), 96, 96, pad: 2, headerPx: 34)).Bounds;
+
+        var tab = FenceClusterBuilder.CollapsedTabBounds(pts, 96, 96, 2, 2, 2, 2, 34);
+
+        Assert.Equal(box.Left, tab.Left);   // no sideways jump when folding
+        Assert.Equal(box.Top, tab.Top);     // no downward jump (the old bug dropped it by pad+34)
+        Assert.Equal(box.Width, tab.Width); // no narrowing
+        Assert.Equal(34, tab.Height);       // title band only
+    }
+
+    [Fact]
+    public void CollapsedTab_HonorsPerSidePaddingLikeTheBox()
+    {
+        // Asymmetric insets (the user can drag each edge) must move the tab and the box together.
+        var pts = new[] { new PointI(500, 200), new PointI(700, 300) };
+        var box = FenceClusterBuilder.Build(
+            pts.Select(p => ("软件", p)).ToArray(), 96, 96,
+            padLeft: 10, padRight: 30, padTop: 5, padBottom: 15, headerPx: 34).Single().Bounds;
+
+        var tab = FenceClusterBuilder.CollapsedTabBounds(pts, 96, 96, 10, 5, 30, 15, 34);
+
+        Assert.Equal(box.Left, tab.Left);
+        Assert.Equal(box.Top, tab.Top);
+        Assert.Equal(box.Width, tab.Width);
+    }
+
     private static bool Overlaps(RectI x, RectI y)
         => x.Left < y.Right && x.Right > y.Left && x.Top < y.Bottom && x.Bottom > y.Top;
 }

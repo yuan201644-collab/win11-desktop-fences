@@ -608,14 +608,16 @@ public sealed class FenceOverlayController : IDisposable
     }
 
     /// <summary>The tab that replaces a collapsed cluster: the icons' bounding box shrunk to title-band height.</summary>
-    private static RectI TabBounds(IReadOnlyList<DesktopIcon> icons, int cellW, int cellH)
-    {
-        int minX = icons.Min(ic => ic.Position.X);
-        int minY = icons.Min(ic => ic.Position.Y);
-        int maxX = icons.Max(ic => ic.Position.X + cellW);
-        int width = Math.Max(cellW, maxX - minX);
-        return new RectI(minX, minY, width, Math.Max(1, FenceHeader.HeaderPx));
-    }
+    /// <remarks>
+    /// Must reuse <see cref="FenceClusterBuilder.CollapsedTabBounds"/> — i.e. the exact geometry the
+    /// expanded box uses. An earlier ad-hoc formula here ignored the per-side padding and the header
+    /// lift, so folding kicked the title right by padLeft and down by padTop+HeaderPx (and narrowed
+    /// it), and expanding snapped it back: "折叠时标题框会移动，展开之后又会回去".
+    /// </remarks>
+    private RectI TabBounds(IReadOnlyList<DesktopIcon> icons, int cellW, int cellH)
+        => FenceClusterBuilder.CollapsedTabBounds(
+            icons.Select(ic => ic.Position).ToList(), cellW, cellH,
+            _insets.Left, _insets.Top, _insets.Right, _insets.Bottom, FenceHeader.HeaderPx);
 
     /// <summary>
     /// Re-parks icons of collapsed fences that the shell bounced back into the visible desktop
