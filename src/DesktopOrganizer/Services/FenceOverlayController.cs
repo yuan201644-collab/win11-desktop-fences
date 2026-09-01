@@ -327,6 +327,14 @@ public sealed class FenceOverlayController : IDisposable
         _lastIcons = positions;
         _lastShown = shown;
 
+        // Explorer refreshes (F5 / shell restart) can bounce collapsed icons back onto the visible
+        // desktop; re-park any that left the off-screen zone so the fence stays collapsed. Only
+        // Explorer can move a hidden icon (the user can't see one to drag it), so this is safe.
+        ReparkBouncedIcons(icons);
+        icons = _provider.GetIcons(); // fresh snapshot after any re-parking
+        positions = IconPositions(icons);
+        _lastIcons = positions;
+
         // Group by on-screen box (software split by purpose + folder/file/other), stable order,
         // and remember which ListView indexes each box holds (for dragging). Collapsed boxes are
         // skipped — their icons are parked off-screen; a thin tab is appended below instead.
@@ -519,6 +527,33 @@ public sealed class FenceOverlayController : IDisposable
         int maxX = icons.Max(ic => ic.Position.X + cellW);
         int width = Math.Max(cellW, maxX - minX);
         return new RectI(minX, minY, width, Math.Max(1, FenceHeader.HeaderPx));
+    }
+
+    /// <summary>
+    /// Re-parks icons of collapsed fences that the shell bounced back into the visible desktop
+    /// (e.g. after F5 or an explorer restart). Off-screen cells sit far below -10000 on both axes;
+    /// any other coordinate means the icon escaped and must go back to its cell.
+    /// </summary>
+    private void ReparkBouncedIcons(IReadOnlyList<DesktopIcon> icons)
+    {
+        if (_host.CollapsedTitles.Count == 0) return;
+        int sx = Math.Max(1, _provider.IconSpacingX);
+        int sy = Math.Max(1, _provider.IconSpacingY);
+        foreach (var title in _host.CollapsedTitles)
+        {
+            if (!_hiddenIcons.TryGetValue(title, out var originals) || originals.Count == 0) continue;
+            int i = 0;
+            foreach (var ic in icons)
+            {
+                if (!originals.ContainsKey(ic.Name)) continue;
+                if (ic.Position.X > -10000 || ic.Position.Y > -10000)
+                {
+                    try { _provider.SetPosition(ic.Index, new PointI(-32000 - sx * i, -32000 - sy * i)); }
+                    catch (Exception) { /* best-effort — next tick retries */ }
+                }
+                i++;
+            }
+        }
     }
 
     private void ExpandRestore(string title)
