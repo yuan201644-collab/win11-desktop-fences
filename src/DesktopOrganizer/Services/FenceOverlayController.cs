@@ -471,7 +471,18 @@ public sealed class FenceOverlayController : IDisposable
     private void OnCollapseToggled(string title)
     {
         bool collapsed = _host.ToggleCollapse(title);
-        if (collapsed) CollapseHide(title);
+        if (collapsed)
+        {
+            // CollapseHide can fail (no icons matched / provider unavailable). In that case the
+            // host's flag must be rolled back — otherwise the box disappears while the icons stay
+            // on the desktop, which looks like "collapse did nothing".
+            if (!CollapseHide(title))
+            {
+                _host.ToggleCollapse(title); // roll back to expanded
+                ForceRefresh();
+                return;
+            }
+        }
         else ExpandRestore(title);
         PersistCollapsed();
         ForceRefresh();
@@ -484,11 +495,13 @@ public sealed class FenceOverlayController : IDisposable
         ExpandRestore(title);
     }
 
-    private void CollapseHide(string title)
+    /// <summary>Parks a cluster's icons off-screen. Returns false (leaving everything as-is) when
+    /// nothing could be hidden — the caller must roll back the host's collapsed flag then.</summary>
+    private bool CollapseHide(string title)
     {
-        if (_hiddenIcons.ContainsKey(title)) return; // already hidden
+        if (_hiddenIcons.ContainsKey(title)) return true; // already hidden
         var icons = _provider.GetIcons().Where(ic => GroupTitle(ic) == title).ToList();
-        if (icons.Count == 0) return;
+        if (icons.Count == 0) return false;
 
         int sx = Math.Max(1, _provider.IconSpacingX);
         int sy = Math.Max(1, _provider.IconSpacingY);
@@ -517,6 +530,7 @@ public sealed class FenceOverlayController : IDisposable
         }
         _hiddenIcons[title] = originals;
         _tabBounds[title] = TabBounds(icons, sx, sy);
+        return true;
     }
 
     /// <summary>The tab that replaces a collapsed cluster: the icons' bounding box shrunk to title-band height.</summary>
