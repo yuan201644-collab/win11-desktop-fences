@@ -384,6 +384,10 @@ public sealed class FenceOverlayController : IDisposable
                 title, 0, new RectI(tab.X, tab.Y, Math.Max(24, tab.Width), Math.Max(1, tab.Height))));
         }
 
+        // DIAG (fold/expand, only folder vanishes): dump the live cluster set every refresh so a
+        // single repro shows whether the "文件夹" cluster is even generated after expand (and where).
+        TraceLog($"[refresh] shown={shown} clusters=[{string.Join(", ", clusters.Select(c => $"{c.Title}({c.IconCount})@{c.Bounds.Left},{c.Bounds.Top}"))}] collapsed=[{string.Join(",", _host.CollapsedTitles)}]");
+
         _host.Sync(clusters, FenceHeader.HeaderPx);
         _host.SetVisible(shown);
         SaveLayout(); // follow manual drags so the final layout persists
