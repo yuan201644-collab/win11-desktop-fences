@@ -6,7 +6,8 @@
         xmlns:local="clr-namespace:DesktopOrganizer"
         mc:Ignorable="d"
         FontFamily="Segoe UI, Microsoft YaHei UI"
-        Title="桌面图标整理" Height="660" Width="820">
+        Title="桌面图标整理" Height="660" Width="820"
+        Icon="pack://application:,,,/app.ico">
     <Window.Resources>
         <!-- Top strip = Win11 "static tab" (Pivot) pattern: Microsoft's guidance reserves this for
              settings surfaces with a fixed, predefined set of sections; TabView is explicitly for

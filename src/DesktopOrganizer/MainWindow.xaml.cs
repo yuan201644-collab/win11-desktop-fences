@@ -108,15 +108,18 @@ public partial class MainWindow : Window
     /// the app's permanent home, so it has to be recognizable at a glance. Falls back quietly if the
     /// exe has no embedded icon (or the extraction is blocked).
     /// </summary>
+    /// <summary>Loads the app icon. Prefers the resource embedded in this assembly (works in single-file
+    /// publish too), and falls back to the placeholder system icon if anything goes wrong.</summary>
     private static System.Drawing.Icon LoadAppIcon()
     {
         try
         {
-            var exe = AutoStartService.CurrentExePath();
-            if (exe is not null && File.Exists(exe))
-                return System.Drawing.Icon.ExtractAssociatedIcon(exe) ?? SystemIcons.Application;
+            // pack://application:,,,/app.ico resolves to the WPF resource set in the csproj.
+            // Reading from the assembly works in both `dotnet run` and self-contained publish.
+            var sri = Application.GetResourceStream(new Uri("pack://application:,,,/app.ico"));
+            if (sri?.Stream is { } stream) return new System.Drawing.Icon(stream);
         }
-        catch (Exception) { /* fall through to the placeholder */ }
+        catch (Exception) { /* fall through */ }
         return SystemIcons.Application;
     }
 

@@ -11,6 +11,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- App icon for the .exe and the WPF window. Sourced as a Resource so the runtime can
+         load it from pack://application:,,,/app.ico for the NotifyIcon as well. -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Resource>app.ico</Resource>
   </PropertyGroup>
 
   <ItemGroup>
