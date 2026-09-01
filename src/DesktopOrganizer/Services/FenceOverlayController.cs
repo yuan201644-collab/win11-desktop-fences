@@ -96,6 +96,7 @@ public sealed class FenceOverlayController : IDisposable
         _host.DragMoved += OnDragMoved;
         _host.DragEnded += OnDragEnded;
         _host.CollapseToggled += OnCollapseToggled;
+        _host.ContextMenuRequested += (t, x, y) => FenceContextMenu?.Invoke(t, x, y);
 
         // Restore the persisted collapsed state. Records from the legacy (plain string array)
         // format carry no tab rect / hidden positions — their icons were never parked off-screen,
@@ -194,6 +195,11 @@ public sealed class FenceOverlayController : IDisposable
         Order = new List<string>(_categories.Order),
         Hidden = new List<string>(_categories.Hidden),
     };
+
+    /// <summary>Raised when a fence's header (incl. collapsed tab) is right-clicked. The UI layer
+    /// shows a context menu of extra actions; the screen-pixel cursor location is included so the
+    /// menu can be placed at the click point.</summary>
+    public event Action<string, int, int>? FenceContextMenu;
 
     /// <summary>
     /// Swaps in a user-edited grouping config, persists it, and redraws the box titles immediately.
@@ -536,6 +542,26 @@ public sealed class FenceOverlayController : IDisposable
         }
         PersistCollapsed();
         ForceRefresh();
+    }
+
+    /// <summary>Public entry used by the right-click menu: flip one fence's collapsed state.</summary>
+    public void ToggleFence(string title) => OnCollapseToggled(title);
+
+    /// <summary>True when <paramref name="title"/> is currently drawn as a collapsed tab.</summary>
+    public bool IsCollapsed(string title) => _host.IsCollapsed(title);
+
+    /// <summary>Expands every collapsed fence at once (right-click menu: 全部展开).</summary>
+    public void ExpandAll()
+    {
+        foreach (var t in _host.CollapsedTitles.ToList())
+            if (_host.IsCollapsed(t)) OnCollapseToggled(t);
+    }
+
+    /// <summary>Collapses every visible fence at once (right-click menu: 全部折叠).</summary>
+    public void CollapseAll()
+    {
+        foreach (var t in BoxOrder)
+            if (!_host.IsCollapsed(t)) OnCollapseToggled(t);
     }
 
     /// <summary>Force-expands a collapsed fence whose box is going away (hidden/removed in settings):

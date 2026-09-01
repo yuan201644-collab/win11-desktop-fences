@@ -24,6 +24,9 @@ public sealed class FenceHost
     /// <summary>Raised when a fence's header is double-clicked — flip its collapsed state.</summary>
     public event Action<string>? CollapseToggled;
 
+    /// <summary>Raised when a fence's header (incl. collapsed tab) is right-clicked — show its context menu.</summary>
+    public event Action<string, int, int>? ContextMenuRequested;
+
     /// <summary>Raised when a drag begins — snapshot the cluster's icon positions here.</summary>
     public event Action<string>? DragStarted;
 
@@ -113,6 +116,7 @@ public sealed class FenceHost
         win.ClusterDrag += (t, dx, dy) => DragMoved?.Invoke(t, dx, dy);
         win.ClusterDragEnd += (t) => DragEnded?.Invoke(t);
         win.TitleToggleCollapse += (t) => CollapseToggled?.Invoke(t);
+        win.ContextMenuRequested += (t, x, y) => ContextMenuRequested?.Invoke(t, x, y);
         _fences.Add(title, win);
         return win;
     }

@@ -105,6 +105,42 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- WinUI-style toggle switch, reused for the 开机自启动 switch. A CheckBox is the accessible
+             foundation (keyboard + screen-reader support); the template only restyles it as a sliding
+             pill so the "开关" reads as an on/off switch rather than a tick box. -->
+        <Style x:Key="SwitchToggle" TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Background="Transparent">
+                            <Grid Width="44" Height="22" VerticalAlignment="Center">
+                                <Border x:Name="Track" CornerRadius="11" Background="#FFBFBFBF" SnapsToDevicePixels="True" />
+                                <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="White" HorizontalAlignment="Left"
+                                         VerticalAlignment="Center" Margin="3,0,0,0">
+                                    <Ellipse.Effect>
+                                        <DropShadowEffect BlurRadius="3" ShadowDepth="1" Opacity="0.35" />
+                                    </Ellipse.Effect>
+                                </Ellipse>
+                            </Grid>
+                            <ContentPresenter Margin="10,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right" />
+                                <Setter TargetName="Thumb" Property="Margin" Value="0,0,3,0" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Track" Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -168,6 +204,36 @@
                             <TextBlock Text="取消勾选即隐藏该框（图标位置不动）；上下箭头调整框的排列顺序。"
                                        Style="{StaticResource SectionHint}" />
                             <StackPanel x:Name="CategorySection" />
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Logon behaviour: the auto-start switch plus how long to wait before booting in. -->
+            <TabItem Header="启动">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <TextBlock Text="开机自启动" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="开启后随 Windows 登录自动运行，并且只驻留托盘、不弹窗口。关闭窗口只是隐藏，要彻底退出请用托盘图标右键菜单里的「退出」。"
+                                       Style="{StaticResource SectionHint}" />
+
+                            <CheckBox x:Name="RunAtLogonBox" Style="{StaticResource SwitchToggle}" Content="开机自动启动"
+                                      Checked="RunAtLogonBox_Toggled" Unchecked="RunAtLogonBox_Toggled" />
+
+                            <TextBlock Text="开机后延迟启动" Style="{StaticResource SubGroupTitle}" Margin="0,14,0,4" />
+                            <TextBlock Text="刚登录时桌面图标列表往往还没准备好，等几秒再启动更稳；等待期间程序完全不占资源。"
+                                       Style="{StaticResource SectionHint}" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                <Slider x:Name="LogonDelaySlider" Minimum="0" Maximum="60" Width="180"
+                                        VerticalAlignment="Center" TickFrequency="1" IsSnapToTickEnabled="True"
+                                        ValueChanged="LogonDelaySlider_ValueChanged" />
+                                <TextBlock x:Name="LogonDelayText" Width="70" VerticalAlignment="Center"
+                                           Margin="10,0,0,0" />
+                            </StackPanel>
+
+                            <TextBlock x:Name="StartupStatusText" Margin="0,16,0,0" FontSize="12"
+                                       Foreground="{StaticResource HintTextBrush}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
                 </ScrollViewer>

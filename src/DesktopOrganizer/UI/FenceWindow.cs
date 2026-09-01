@@ -47,6 +47,10 @@ public sealed class FenceWindow : Window
     /// <summary>Raises when the header is double-clicked — the controller flips this box's collapsed state.</summary>
     public event Action<string>? TitleToggleCollapse;
 
+    /// <summary>Raises when the header (incl. the collapsed tab) is right-clicked — the controller
+    /// opens a context menu of extra actions at the cursor. Carries the screen-pixel cursor location.</summary>
+    public event Action<string, int, int>? ContextMenuRequested;
+
     public FenceWindow(string clusterTitle, OverlayAppearance appearance)
     {
         ClusterTitle = clusterTitle;
@@ -112,6 +116,7 @@ public sealed class FenceWindow : Window
         Content = root;
         SourceInitialized += OnSourceInitialized;
         MouseLeftButtonDown += OnMouseLeftButtonDown;
+        MouseRightButtonDown += OnMouseRightButtonDown;
         MouseMove += OnMouseMove;
         MouseLeftButtonUp += OnMouseLeftButtonUp;
         LostMouseCapture += (_, _) => EndDrag();
@@ -247,6 +252,18 @@ public sealed class FenceWindow : Window
     {
         e.Handled = true; // swallow the click so the window-level handler doesn't arm a drag
         TitleToggleCollapse?.Invoke(ClusterTitle);
+    }
+
+    /// <summary>
+    /// Right-click on the header opens the per-fence context menu. Only the header is hittable (the
+    /// body is HTTRANSPARENT and passes clicks through to the real icons), so any window-level
+    /// right-click necessarily landed on the header — both the expanded strip and the collapsed tab.
+    /// </summary>
+    private void OnMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!NativeMethods.GetCursorPos(out var pt)) pt = default;
+        ContextMenuRequested?.Invoke(ClusterTitle, pt.X, pt.Y);
+        e.Handled = true;
     }
 
     private void OnMouseMove(object sender, MouseEventArgs e)

@@ -2,6 +2,9 @@
 using System.IO;
 using System.Threading;
 using System.Windows;
+using System.Windows.Threading;
+using DesktopOrganizer.Core.Config;
+using DesktopOrganizer.Services;
 using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
 
@@ -30,8 +33,13 @@ public partial class App : Application
         _mutex = new Mutex(true, MutexName, out var createdNew);
         if (!createdNew)
         {
-            MessageBox.Show("「桌面图标整理」已在运行。请先关闭已打开的窗口。",
-                "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Information);
+            // A logon-triggered launch must never throw a dialog over the user's desktop — if we are
+            // already resident in the tray, the second copy just goes away quietly.
+            if (!AutoStartService.HasStartupArg(e.Args))
+            {
+                MessageBox.Show("「桌面图标整理」已在运行（托盘图标可打开窗口）。",
+                    "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
             Shutdown();
             return;
         }
@@ -58,9 +66,37 @@ public partial class App : Application
         };
 
         // StartupUri was removed so we can enforce single-instance first; build the window here.
+        var settings = StartupSettingsStore.Load(StartupSettingsStore.DefaultFilePath);
+
+        // The Run entry is a cache of the persisted switch: re-syncing it here repairs the entry
+        // after the exe was moved to another folder (otherwise auto-start silently dies).
+        if (settings.RunAtLogon) AutoStartService.Sync(enabled: true);
+
+        var silent = AutoStartService.HasStartupArg(e.Args);
+        if (silent && settings.LogonDelaySeconds > 0)
+        {
+            // Right after logon the shell's desktop ListView often isn't ready for a few seconds.
+            // Waiting is free — nothing is on screen yet — and avoids scanning an empty desktop.
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(settings.LogonDelaySeconds) };
+            timer.Tick += (_, _) => { timer.Stop(); OpenWindow(silent); };
+            timer.Start();
+        }
+        else
+        {
+            OpenWindow(silent);
+        }
+    }
+
+    /// <summary>
+    /// Creates the settings window. A logon launch (<paramref name="silent"/>) deliberately does NOT
+    /// show it: the tray icon is created inside <see cref="MainWindow"/> either way, so the app is
+    /// fully running and reachable while staying out of the user's way.
+    /// </summary>
+    private void OpenWindow(bool silent)
+    {
         var window = new MainWindow();
         MainWindow = window;
-        window.Show();
+        if (!silent) window.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
