@@ -255,12 +255,9 @@ public sealed class FenceOverlayController : IDisposable
     {
         if (!_provider.IsAvailable) return;
 
-        // A fresh arrange repositions every icon, which would also re-place icons parked off-screen
-        // by collapse — so expand everything first: the user asked to re-layout the whole desktop.
-        foreach (var t in _host.CollapsedTitles.ToList()) ExpandFence(t);
-        PersistCollapsed();
-
-        // Positions are ignored while "Auto arrange" is on — silently clear it first.
+        // Positions are ignored while "Auto arrange" is on — silently clear it first. Must come
+        // before the collapse-state drop below, so ExpandRestore's own auto-arrange guard can't
+        // refuse and leave the fence half-collapsed through a full re-layout.
         if (!_provider.DisableAutoArrange())
         {
             _host.SetVisible(false);
@@ -272,6 +269,17 @@ public sealed class FenceOverlayController : IDisposable
 
         // Allow the shell a moment to apply the style change before we move icons.
         System.Threading.Thread.Sleep(200);
+
+        // A fresh arrange repositions every icon — icons parked off-screen by collapse included —
+        // so the collapse state (tab + hidden positions) is dropped outright instead of restoring
+        // point-by-point; the layout below re-places the whole desktop anyway.
+        foreach (var t in _host.CollapsedTitles.ToList())
+        {
+            _host.ToggleCollapse(t);
+            _hiddenIcons.Remove(t);
+            _tabBounds.Remove(t);
+        }
+        PersistCollapsed();
 
         var (x, y, w, h) = Primary;
         var spacingY = _provider.IconSpacingY;
@@ -483,16 +491,31 @@ public sealed class FenceOverlayController : IDisposable
                 return;
             }
         }
-        else ExpandRestore(title);
+        else if (!ExpandRestore(title))
+        {
+            // A real restore was impossible (auto-arrange couldn't be cleared / ListView not
+            // readable) — roll the flag back to collapsed so the tab stays and no icon is
+            // silently stranded off-screen; the user can retry after fixing the cause.
+            _host.ToggleCollapse(title);
+            ForceRefresh();
+            return;
+        }
         PersistCollapsed();
         ForceRefresh();
     }
 
-    /// <summary>Fully expands a collapsed fence: clears the host's collapsed flag and restores every icon.</summary>
+    /// <summary>Force-expands a collapsed fence whose box is going away (hidden/removed in settings):
+    /// flips the host flag, then restores every icon. If the restore itself is refused (auto-arrange
+    /// / ListView unreadable) the record is still dropped — a box that no longer exists must not
+    /// leave its icons parked with no tab left to bring them back.</summary>
     private void ExpandFence(string title)
     {
         if (_host.IsCollapsed(title)) _host.ToggleCollapse(title);
-        ExpandRestore(title);
+        if (!ExpandRestore(title))
+        {
+            _hiddenIcons.Remove(title);
+            _tabBounds.Remove(title);
+        }
     }
 
     /// <summary>Parks a cluster's icons off-screen. Returns false (leaving everything as-is) when
@@ -500,6 +523,17 @@ public sealed class FenceOverlayController : IDisposable
     private bool CollapseHide(string title)
     {
         if (_hiddenIcons.ContainsKey(title)) return true; // already hidden
+
+        // Same auto-arrange defense as expand: while it is on, every SetPosition throws and the
+        // icons would stay visible while the box folds away — refuse instead of half-folding.
+        if (_provider.IsAutoArrangeOn && !_provider.DisableAutoArrange())
+        {
+            MessageBox.Show("桌面处于「自动排列图标」状态，无法折叠图标。\n请手动关闭：桌面右键 → 查看 → 取消勾选「自动排列图标」，然后重试。",
+                "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+        if (_provider.IsAutoArrangeOn) System.Threading.Thread.Sleep(200); // let the style change settle
+
         var icons = _provider.GetIcons().Where(ic => GroupTitle(ic) == title).ToList();
         if (icons.Count == 0) return false;
 
@@ -521,10 +555,11 @@ public sealed class FenceOverlayController : IDisposable
                 // exact pre-collapse position from _hiddenIcons.
                 _provider.SetPosition(ic.Index, new PointI(-32000 - sx * i, -32000 - sy * i));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // Best-effort park — the original position is recorded regardless, so expanding
                 // still restores every icon even if one failed to move.
+                TraceLog($"[collapse] '{title}' park FAILED '{ic.Name}': {ex.Message}");
             }
             i++;
         }
@@ -570,22 +605,72 @@ public sealed class FenceOverlayController : IDisposable
         }
     }
 
-    private void ExpandRestore(string title)
+    /// <summary>
+    /// Moves a collapsed cluster's icons back to their pre-collapse positions. Returns false when
+    /// the desktop made a real restore impossible (auto-arrange could not be cleared, or the
+    /// ListView is momentarily unreadable) — the caller must then keep the fence collapsed so no
+    /// icon is silently stranded off-screen.
+    /// </summary>
+    private bool ExpandRestore(string title)
     {
-        if (_hiddenIcons.TryGetValue(title, out var originals))
+        if (!_hiddenIcons.TryGetValue(title, out var originals)) return true;
+
+        // (H1) Auto-arrange makes every SetPosition throw, which used to leave every icon parked
+        // off-screen behind a silent catch — "expanded" but invisible. Same defense as
+        // ArrangeAndShow/RestoreSavedLayout: clear the style; if that fails, refuse to expand.
+        if (_provider.IsAutoArrangeOn && !_provider.DisableAutoArrange())
         {
-            var byName = _provider.GetIcons().ToDictionary(ic => ic.Name, StringComparer.OrdinalIgnoreCase);
-            foreach (var (name, pos) in originals)
+            TraceLog($"[expand] '{title}' REFUSED: auto-arrange on and could not be disabled");
+            MessageBox.Show("桌面仍处于「自动排列图标」状态，无法恢复图标位置。\n请手动关闭：桌面右键 → 查看 → 取消勾选「自动排列图标」，然后再次点击展开。",
+                "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+        if (_provider.IsAutoArrangeOn)
+        {
+            TraceLog($"[expand] '{title}': auto-arrange was on — disabled automatically");
+            System.Threading.Thread.Sleep(200); // let the style change settle before moving icons
+        }
+
+        var byName = _provider.GetIcons().ToDictionary(ic => ic.Name, StringComparer.OrdinalIgnoreCase);
+        if (byName.Count == 0)
+        {
+            // Explorer likely restarted under us, so GetIcons can't see the desktop yet. Dropping
+            // the record here would strand the parked icons off-screen with no way back — stay
+            // collapsed and let the user retry once the shell is back.
+            TraceLog($"[expand] '{title}' REFUSED: ListView returned 0 icons (explorer restart?)");
+            return false;
+        }
+
+        int missing = 0, failed = 0;
+        foreach (var (name, pos) in originals)
+        {
+            if (!byName.TryGetValue(name, out var ic))
             {
-                if (byName.TryGetValue(name, out var ic))
-                {
-                    try { _provider.SetPosition(ic.Index, pos); }
-                    catch (Exception) { /* best-effort — a failure just leaves that icon parked */ }
-                }
+                // (H2) The display name may have changed while collapsed (renamed, or a .lnk/.url
+                // suffix flapping) — try a loose match; log anything still unfindable so a repeat
+                // has concrete evidence instead of silent invisibility.
+                ic = FindLoose(byName, name);
+                if (ic is null) { missing++; TraceLog($"[expand] '{title}' MISSING icon '{name}'"); continue; }
+            }
+            try { _provider.SetPosition(ic.Index, pos); }
+            catch (DesktopAutoArrangeException ex)
+            {
+                failed++;
+                TraceLog($"[expand] '{title}' FAILED '{name}' @{pos}: {ex.Message}");
+                break; // auto-arrange came back mid-restore — stop before the rest gets stranded
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                TraceLog($"[expand] '{title}' FAILED '{name}' @{pos}: {ex.Message}");
             }
         }
+
+        if (missing > 0 || failed > 0)
+            TraceLog($"[expand] '{title}' INCOMPLETE: restored={originals.Count - missing - failed} missing={missing} failed={failed}");
         _hiddenIcons.Remove(title);
         _tabBounds.Remove(title);
+        return true;
     }
 
     /// <summary>Persists the collapsed set (title → tab rect + hidden icon positions).</summary>
@@ -654,6 +739,39 @@ public sealed class FenceOverlayController : IDisposable
     private static string CollapseFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-collapse.json");
+
+    // Diagnostic log for collapse/expand failures — the silent catches used to hide exactly why
+    // icons stayed off-screen; every failure now lands here so a repro can be read back.
+    private static string CollapseLogPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "fence-collapse.log");
+
+    private static void TraceLog(string line)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(CollapseLogPath)!);
+            File.AppendAllText(CollapseLogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {line}{Environment.NewLine}");
+        }
+        catch { /* logging must never break the app */ }
+    }
+
+    /// <summary>Loose icon lookup for a restore whose exact display name no longer matches:
+    /// compares both sides with a trailing .lnk/.url stripped, case-insensitively.</summary>
+    private static DesktopIcon? FindLoose(Dictionary<string, DesktopIcon> byName, string name)
+    {
+        var bare = StripLinkSuffix(name);
+        foreach (var (key, icon) in byName)
+            if (StripLinkSuffix(key).Equals(bare, StringComparison.OrdinalIgnoreCase)) return icon;
+        return null;
+    }
+
+    private static string StripLinkSuffix(string s)
+    {
+        if (s.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return s[..^4];
+        if (s.EndsWith(".url", StringComparison.OrdinalIgnoreCase)) return s[..^4];
+        return s;
+    }
 
     private static string SortFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
