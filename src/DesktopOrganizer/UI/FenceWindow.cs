@@ -21,6 +21,8 @@ public sealed class FenceWindow : Window
     private readonly Border _box;
     private readonly Border _header;
     private readonly TextBlock _title;
+    private Border _toggleBtn = null!;
+    private TextBlock _toggleGlyph = null!;
     private OverlayAppearance _appearance = OverlayAppearance.Default;
 
     // Drag tracking (screen pixels).
@@ -68,17 +70,42 @@ public sealed class FenceWindow : Window
         Canvas.SetZIndex(_box, 0);
         root.Children.Add(_box);
 
-        _header = new Border
+        _header = new Border { CornerRadius = new CornerRadius(12, 12, 0, 0) };
+        var headerGrid = new Grid();
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        _title = new TextBlock
         {
-            CornerRadius = new CornerRadius(12, 12, 0, 0),
-            Child = _title = new TextBlock
-            {
-                FontSize = 13,
-                FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(12, 0, 8, 0),
-            },
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 4, 0),
         };
+        Grid.SetColumn(_title, 0);
+        _toggleGlyph = new TextBlock
+        {
+            Text = "▾",
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        _toggleBtn = new Border
+        {
+            Child = _toggleGlyph,
+            Width = 22,
+            Height = 18,
+            CornerRadius = new CornerRadius(4),
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = new SolidColorBrush(Color.FromArgb(52, 255, 255, 255)),
+            Cursor = Cursors.Hand,
+            ToolTip = "折叠 / 展开",
+        };
+        _toggleBtn.MouseLeftButtonDown += OnToggleClicked;
+        Grid.SetColumn(_toggleBtn, 1);
+        headerGrid.Children.Add(_title);
+        headerGrid.Children.Add(_toggleBtn);
+        _header.Child = headerGrid;
         Canvas.SetZIndex(_header, 1);
         root.Children.Add(_header);
 
@@ -147,6 +174,9 @@ public sealed class FenceWindow : Window
         double headerDip = headerPx / Math.Max(0.1, sy);
         Height = collapsed ? Math.Max(1, headerDip) : heightPx / Math.Max(0.1, sy);
 
+        // Glyph mirrors the state so the tab itself stays discoverable: ▾ = can collapse, ▸ = can expand.
+        _toggleGlyph.Text = collapsed ? "▸" : "▾";
+
         // Collapsed: hide the box body and keep just the header (title) spanning the tab width.
         if (collapsed)
         {
@@ -208,6 +238,12 @@ public sealed class FenceWindow : Window
         _startX = _lastX = pt.X;
         _startY = _lastY = pt.Y;
         _dragCandidate = true;
+    }
+
+    private void OnToggleClicked(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true; // swallow the click so the window-level handler doesn't arm a drag
+        TitleToggleCollapse?.Invoke(ClusterTitle);
     }
 
     private void OnMouseMove(object sender, MouseEventArgs e)
