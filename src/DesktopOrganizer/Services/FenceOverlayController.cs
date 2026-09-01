@@ -135,6 +135,11 @@ public sealed class FenceOverlayController : IDisposable
                 // Overlay restore is best-effort; the user can still click 整理 to re-layout.
             }
         }
+
+        // Rescue any icon left parked off-screen by a prior crash whose collapse record was lost
+        // (e.g. an expand that threw before it persisted). Without this, such icons stay invisible
+        // with no tab to bring them back. Icons that are intentionally collapsed are left alone.
+        if (_provider.IsAvailable) RescueStrandedIcons();
     }
 
     /// <summary>
@@ -454,8 +459,8 @@ public sealed class FenceOverlayController : IDisposable
         var (sx, sy, sw, sh) = Primary;
         var spacingX = _provider.IconSpacingX;
         var spacingY = _provider.IconSpacingY;
-        var byName = _provider.GetIcons()
-            .ToDictionary(ic => ic.Name, StringComparer.OrdinalIgnoreCase);
+        var byName = new Dictionary<string, DesktopIcon>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ic in _provider.GetIcons()) { var k = ic.Name; if (!byName.ContainsKey(k)) byName[k] = ic; }
         foreach (var kv in saved)
         {
             if (!byName.TryGetValue(kv.Key, out var icon)) continue;
@@ -542,7 +547,7 @@ public sealed class FenceOverlayController : IDisposable
         // Snapshot every original position FIRST so a partial SetPosition failure below can never
         // lose an icon's restore point.
         var originals = new Dictionary<string, PointI>(icons.Count, StringComparer.OrdinalIgnoreCase);
-        foreach (var ic in icons) originals[ic.Name] = ic.Position;
+        foreach (var ic in icons) originals[StableKey(ic)] = ic.Position;
 
         int i = 0;
         foreach (var ic in icons)
@@ -594,7 +599,7 @@ public sealed class FenceOverlayController : IDisposable
             int i = 0;
             foreach (var ic in icons)
             {
-                if (!originals.ContainsKey(ic.Name)) continue;
+                if (!originals.ContainsKey(StableKey(ic))) continue;
                 if (ic.Position.X > -10000 || ic.Position.Y > -10000)
                 {
                     try { _provider.SetPosition(ic.Index, new PointI(-32000 - sx * i, -32000 - sy * i)); }
@@ -631,8 +636,17 @@ public sealed class FenceOverlayController : IDisposable
             System.Threading.Thread.Sleep(200); // let the style change settle before moving icons
         }
 
-        var byName = _provider.GetIcons().ToDictionary(ic => ic.Name, StringComparer.OrdinalIgnoreCase);
-        if (byName.Count == 0)
+        // Build the live lookup by a STABLE, UNIQUE key (the file path), NOT the display name:
+        // two icons can share a display name (e.g. two "健身助手" shortcuts), and ToDictionary on
+        // names threw ArgumentException — which used to crash expand before a single icon moved.
+        Dictionary<string, DesktopIcon> byKey;
+        try { byKey = BuildKeyIndex(_provider.GetIcons()); }
+        catch (Exception ex)
+        {
+            TraceLog($"[expand] '{title}' REFUSED: could not read desktop icons: {ex.Message}");
+            return false;
+        }
+        if (byKey.Count == 0)
         {
             // Explorer likely restarted under us, so GetIcons can't see the desktop yet. Dropping
             // the record here would strand the parked icons off-screen with no way back — stay
@@ -642,27 +656,27 @@ public sealed class FenceOverlayController : IDisposable
         }
 
         int missing = 0, failed = 0;
-        foreach (var (name, pos) in originals)
+        foreach (var (key, pos) in originals)
         {
-            if (!byName.TryGetValue(name, out var ic))
+            if (!byKey.TryGetValue(key, out var ic))
             {
-                // (H2) The display name may have changed while collapsed (renamed, or a .lnk/.url
-                // suffix flapping) — try a loose match; log anything still unfindable so a repeat
-                // has concrete evidence instead of silent invisibility.
-                ic = FindLoose(byName, name);
-                if (ic is null) { missing++; TraceLog($"[expand] '{title}' MISSING icon '{name}'"); continue; }
+                // Keyed by path, a renamed icon still matches (its path is unchanged); if it's
+                // genuinely gone, log it so a repro has evidence instead of silent invisibility.
+                missing++;
+                TraceLog($"[expand] '{title}' MISSING icon '{key}'");
+                continue;
             }
             try { _provider.SetPosition(ic.Index, pos); }
             catch (DesktopAutoArrangeException ex)
             {
                 failed++;
-                TraceLog($"[expand] '{title}' FAILED '{name}' @{pos}: {ex.Message}");
+                TraceLog($"[expand] '{title}' FAILED '{key}' @{pos}: {ex.Message}");
                 break; // auto-arrange came back mid-restore — stop before the rest gets stranded
             }
             catch (Exception ex)
             {
                 failed++;
-                TraceLog($"[expand] '{title}' FAILED '{name}' @{pos}: {ex.Message}");
+                TraceLog($"[expand] '{title}' FAILED '{key}' @{pos}: {ex.Message}");
             }
         }
 
@@ -756,21 +770,56 @@ public sealed class FenceOverlayController : IDisposable
         catch { /* logging must never break the app */ }
     }
 
-    /// <summary>Loose icon lookup for a restore whose exact display name no longer matches:
-    /// compares both sides with a trailing .lnk/.url stripped, case-insensitively.</summary>
-    private static DesktopIcon? FindLoose(Dictionary<string, DesktopIcon> byName, string name)
+    /// <summary>A stable, UNIQUE key for an icon: its file path (survives renames, and two icons
+    /// with the same display name but different paths stay distinct). Shell items without a path
+    /// fall back to their display name.</summary>
+    private static string StableKey(DesktopIcon ic) =>
+        string.IsNullOrEmpty(ic.Path) ? "name:" + ic.Name : "path:" + ic.Path;
+
+    /// <summary>Builds an icon lookup keyed by <see cref="StableKey"/>. Never throws on duplicate
+    /// display names — the first occurrence wins — which is exactly what used to crash ExpandRestore
+    /// via <c>ToDictionary(ic =&gt; ic.Name)</c>.</summary>
+    private static Dictionary<string, DesktopIcon> BuildKeyIndex(IEnumerable<DesktopIcon> icons)
     {
-        var bare = StripLinkSuffix(name);
-        foreach (var (key, icon) in byName)
-            if (StripLinkSuffix(key).Equals(bare, StringComparison.OrdinalIgnoreCase)) return icon;
-        return null;
+        var dict = new Dictionary<string, DesktopIcon>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ic in icons)
+        {
+            var key = StableKey(ic);
+            if (!dict.ContainsKey(key)) dict[key] = ic;
+        }
+        return dict;
     }
 
-    private static string StripLinkSuffix(string s)
+    /// <summary>Brings back icons stranded off-screen by a prior crash whose collapse record was
+    /// lost (an expand that threw before persisting). Intentionally-collapsed icons (present in
+    /// <see cref="_hiddenIcons"/>) are skipped so they stay parked until the user expands them.</summary>
+    private void RescueStrandedIcons()
     {
-        if (s.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return s[..^4];
-        if (s.EndsWith(".url", StringComparison.OrdinalIgnoreCase)) return s[..^4];
-        return s;
+        try
+        {
+            if (_provider.IsAutoArrangeOn) _provider.DisableAutoArrange();
+            var intentional = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in _hiddenIcons)
+                foreach (var key in kv.Value.Keys) intentional.Add(key);
+
+            var parked = _provider.GetIcons()
+                .Where(ic => ic.Position.X < -10000 || ic.Position.Y < -10000)
+                .ToList();
+            if (parked.Count == 0) return;
+
+            int slot = 0;
+            foreach (var ic in parked)
+            {
+                if (intentional.Contains(StableKey(ic))) continue; // collapsed on purpose
+                int x = 80 + (slot % 12) * 90;
+                int y = 80 + (slot / 12) * 90;
+                try { _provider.SetPosition(ic.Index, new PointI(x, y)); }
+                catch (Exception ex) { TraceLog($"[rescue] FAILED '{ic.Name}' @{ic.Position}: {ex.Message}"); }
+                slot++;
+            }
+            if (slot > 0) TraceLog($"[rescue] brought back {slot} stranded icon(s) to a visible cascade");
+        }
+        catch (Exception ex) { TraceLog($"[rescue] skipped: {ex.Message}"); }
     }
 
     private static string SortFilePath => Path.Combine(
