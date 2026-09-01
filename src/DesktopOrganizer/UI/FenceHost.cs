@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using DesktopOrganizer.Core.Config;
 using DesktopOrganizer.Core.Layout;
@@ -67,15 +66,7 @@ public sealed class FenceHost
 
         foreach (var (title, win) in _fences.ToList())
         {
-            if (!wanted.ContainsKey(title))
-            {
-                // DIAG (fold/expand): a fence window is being hidden because its title is no longer
-                // among the wanted clusters. Log it so a repro can show exactly which title vanished
-                // and what the live cluster set looked like — this is the prime suspect for
-                // "expand后整个框消失". Remove once root-caused.
-                Diag($"HIDE '{title}' — wanted=[{string.Join(",", wanted.Keys)}]");
-                win.Hide();
-            }
+            if (!wanted.ContainsKey(title)) win.Hide();
         }
 
         foreach (var cluster in clusters)
@@ -86,18 +77,6 @@ public sealed class FenceHost
                 IsCollapsed(cluster.Title));
             if (!win.IsVisible) win.Show();
         }
-    }
-
-    private static void Diag(string msg)
-    {
-        try
-        {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DesktopOrganizer");
-            Directory.CreateDirectory(dir);
-            File.AppendAllText(Path.Combine(dir, "fence-host.log"),
-                $"[{DateTime.Now:HH:mm:ss.fff}] {msg}\n");
-        }
-        catch { /* diagnostic only */ }
     }
 
     /// <summary>Seeds the remembered collapsed set (loaded from disk) at startup.</summary>
