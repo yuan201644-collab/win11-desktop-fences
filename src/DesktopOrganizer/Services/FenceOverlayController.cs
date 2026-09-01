@@ -51,6 +51,13 @@ public sealed class FenceOverlayController : IDisposable
     private Dictionary<int, PointI> _dragStart = new();
     private bool _dragging;
 
+    // Collapse-to-tab state. Collapsing parks the cluster's real icons off-screen (negative
+    // coordinates) and leaves a thin tab; these two maps remember the pre-collapse icon positions
+    // (by display name) and the tab rectangle so expanding restores the desktop exactly. Persisted
+    // through FenceCollapseStore so a restart can bring the same collapsed state back.
+    private readonly Dictionary<string, Dictionary<string, PointI>> _hiddenIcons = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RectI> _tabBounds = new(StringComparer.OrdinalIgnoreCase);
+
     // Icon display-name → its box title, resolved once at arrange time. RefreshOverlay reuses
     // it every tick so the overlay box matches the placement without re-resolving .lnk targets
     // (COM) dozens of times per refresh.
@@ -89,9 +96,45 @@ public sealed class FenceOverlayController : IDisposable
         _host.DragMoved += OnDragMoved;
         _host.DragEnded += OnDragEnded;
         _host.CollapseToggled += OnCollapseToggled;
-        _host.SetInitialCollapsed(FenceCollapseStore.Load(CollapseFilePath));
+
+        // Restore the persisted collapsed state. Records from the legacy (plain string array)
+        // format carry no tab rect / hidden positions — their icons were never parked off-screen,
+        // so drop the collapsed flag instead of leaving a title invisible with no way back.
+        var collapseRecords = FenceCollapseStore.Load(CollapseFilePath);
+        _host.SetInitialCollapsed(collapseRecords.Select(r => r.Title));
+        foreach (var rec in collapseRecords)
+        {
+            if (rec.Icons is { Count: > 0 } && rec.Tab != default)
+            {
+                _hiddenIcons[rec.Title] = new Dictionary<string, PointI>(rec.Icons, StringComparer.OrdinalIgnoreCase);
+                _tabBounds[rec.Title] = rec.Tab;
+            }
+            else
+            {
+                _host.ToggleCollapse(rec.Title);
+            }
+        }
+
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _timer.Tick += (_, _) => RefreshOverlay();
+
+        // If the last session left fences collapsed, their icons are parked off-screen right now —
+        // bring the overlay up immediately (without re-arranging anything) so the tabs are visible
+        // and the icons aren't simply "missing". Best-effort: a failure here must not kill startup.
+        if (collapseRecords.Count > 0)
+        {
+            try
+            {
+                _arranged = true;
+                RebuildGroupTitles();
+                _timer.Start();
+                RefreshOverlay();
+            }
+            catch (Exception)
+            {
+                // Overlay restore is best-effort; the user can still click 整理 to re-layout.
+            }
+        }
     }
 
     /// <summary>
@@ -179,6 +222,13 @@ public sealed class FenceOverlayController : IDisposable
         };
         try { FenceCategoryStore.Save(CategoryFilePath, _categories); }
         catch (Exception) { /* best-effort */ }
+        // A collapsed box that just got hidden/removed must expand, or its icons stay parked
+        // off-screen with no tab left to restore them.
+        foreach (var t in _host.CollapsedTitles.ToList())
+        {
+            if (!BoxOrder.Contains(t, StringComparer.OrdinalIgnoreCase)) ExpandFence(t);
+        }
+        PersistCollapsed();
         ForceRefresh();
     }
 
@@ -204,6 +254,11 @@ public sealed class FenceOverlayController : IDisposable
     public void ArrangeAndShow()
     {
         if (!_provider.IsAvailable) return;
+
+        // A fresh arrange repositions every icon, which would also re-place icons parked off-screen
+        // by collapse — so expand everything first: the user asked to re-layout the whole desktop.
+        foreach (var t in _host.CollapsedTitles.ToList()) ExpandFence(t);
+        PersistCollapsed();
 
         // Positions are ignored while "Auto arrange" is on — silently clear it first.
         if (!_provider.DisableAutoArrange())
@@ -273,11 +328,13 @@ public sealed class FenceOverlayController : IDisposable
         _lastShown = shown;
 
         // Group by on-screen box (software split by purpose + folder/file/other), stable order,
-        // and remember which ListView indexes each box holds (for dragging).
+        // and remember which ListView indexes each box holds (for dragging). Collapsed boxes are
+        // skipped — their icons are parked off-screen; a thin tab is appended below instead.
         var placed = new List<(string Group, PointI Position)>();
         var membership = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
         foreach (var title in BoxOrder)
         {
+            if (_host.IsCollapsed(title)) continue;
             foreach (var ic in icons.Where(x => GroupTitle(x) == title))
             {
                 placed.Add((title, ic.Position));
@@ -294,7 +351,17 @@ public sealed class FenceOverlayController : IDisposable
             pad: 2, headerPx: FenceHeader.HeaderPx,
             padLeft: _insets.Left, padRight: _insets.Right,
             padTop: _insets.Top, padBottom: _insets.Bottom,
-            separateOverlaps: false); // boxes must stay on their icons, never pushed away from them
+            separateOverlaps: false).ToList(); // boxes must stay on their icons, never pushed away from them
+
+        // Collapsed boxes produce no clusters above; append one thin tab cluster per collapsed
+        // title (drawn at the remembered pre-collapse position) so the tab stays visible/clickable.
+        foreach (var title in _host.CollapsedTitles)
+        {
+            if (!BoxOrder.Contains(title, StringComparer.OrdinalIgnoreCase)) continue;
+            if (!_tabBounds.TryGetValue(title, out var tab)) continue;
+            clusters.Add(new FenceCluster(
+                title, 0, new RectI(tab.X, tab.Y, Math.Max(24, tab.Width), Math.Max(1, tab.Height))));
+        }
 
         _host.Sync(clusters, FenceHeader.HeaderPx);
         _host.SetVisible(shown);
@@ -388,13 +455,106 @@ public sealed class FenceOverlayController : IDisposable
         RefreshOverlay();
     }
 
-    /// <summary>Flips a fence's collapsed state, persists the set, and redraws so the box shrinks to a tab.</summary>
+    /// <summary>Flips a fence's collapsed state. Collapsing parks the cluster's real icons off-screen
+    /// (negative coordinates, far outside the virtual desktop) leaving a thin tab behind;
+    /// expanding moves them back to their exact pre-collapse positions. The hidden positions
+    /// and tab rect are persisted so a restart can restore the same state.
+    /// </summary>
     private void OnCollapseToggled(string title)
     {
-        _host.ToggleCollapse(title);
-        try { FenceCollapseStore.Save(CollapseFilePath, _host.CollapsedTitles); }
-        catch (Exception) { /* best-effort */ }
+        bool collapsed = _host.ToggleCollapse(title);
+        if (collapsed) CollapseHide(title);
+        else ExpandRestore(title);
+        PersistCollapsed();
         ForceRefresh();
+    }
+
+    /// <summary>Fully expands a collapsed fence: clears the host's collapsed flag and restores every icon.</summary>
+    private void ExpandFence(string title)
+    {
+        if (_host.IsCollapsed(title)) _host.ToggleCollapse(title);
+        ExpandRestore(title);
+    }
+
+    private void CollapseHide(string title)
+    {
+        if (_hiddenIcons.ContainsKey(title)) return; // already hidden
+        var icons = _provider.GetIcons().Where(ic => GroupTitle(ic) == title).ToList();
+        if (icons.Count == 0) return;
+
+        int sx = Math.Max(1, _provider.IconSpacingX);
+        int sy = Math.Max(1, _provider.IconSpacingY);
+        // Snapshot every original position FIRST so a partial SetPosition failure below can never
+        // lose an icon's restore point.
+        var originals = new Dictionary<string, PointI>(icons.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var ic in icons) originals[ic.Name] = ic.Position;
+
+        int i = 0;
+        foreach (var ic in icons)
+        {
+            try
+            {
+                // Park the real icon far off the virtual desktop (base -32000 keeps every monitor,
+                // including secondary displays to the left of the primary, fully off-screen). Each
+                // icon gets its own cell so the ListView never merges them; expanding restores the
+                // exact pre-collapse position from _hiddenIcons.
+                _provider.SetPosition(ic.Index, new PointI(-32000 - sx * i, -32000 - sy * i));
+            }
+            catch (Exception)
+            {
+                // Best-effort park — the original position is recorded regardless, so expanding
+                // still restores every icon even if one failed to move.
+            }
+            i++;
+        }
+        _hiddenIcons[title] = originals;
+        _tabBounds[title] = TabBounds(icons, sx, sy);
+    }
+
+    /// <summary>The tab that replaces a collapsed cluster: the icons' bounding box shrunk to title-band height.</summary>
+    private static RectI TabBounds(IReadOnlyList<DesktopIcon> icons, int cellW, int cellH)
+    {
+        int minX = icons.Min(ic => ic.Position.X);
+        int minY = icons.Min(ic => ic.Position.Y);
+        int maxX = icons.Max(ic => ic.Position.X + cellW);
+        int width = Math.Max(cellW, maxX - minX);
+        return new RectI(minX, minY, width, Math.Max(1, FenceHeader.HeaderPx));
+    }
+
+    private void ExpandRestore(string title)
+    {
+        if (_hiddenIcons.TryGetValue(title, out var originals))
+        {
+            var byName = _provider.GetIcons().ToDictionary(ic => ic.Name, StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, pos) in originals)
+            {
+                if (byName.TryGetValue(name, out var ic))
+                {
+                    try { _provider.SetPosition(ic.Index, pos); }
+                    catch (Exception) { /* best-effort — a failure just leaves that icon parked */ }
+                }
+            }
+        }
+        _hiddenIcons.Remove(title);
+        _tabBounds.Remove(title);
+    }
+
+    /// <summary>Persists the collapsed set (title → tab rect + hidden icon positions).</summary>
+    private void PersistCollapsed()
+    {
+        try
+        {
+            var records = _host.CollapsedTitles
+                .Where(t => _hiddenIcons.TryGetValue(t, out var icons) && icons.Count > 0
+                            && _tabBounds.TryGetValue(t, out var tab))
+                .Select(t => new CollapsedFenceRecord(t, _tabBounds[t], _hiddenIcons[t]))
+                .ToList();
+            FenceCollapseStore.Save(CollapseFilePath, records);
+        }
+        catch (Exception)
+        {
+            // Persistence is best-effort — a save failure must never crash the tool.
+        }
     }
 
     /// <summary>
@@ -464,7 +624,15 @@ public sealed class FenceOverlayController : IDisposable
         try
         {
             var icons = _provider.GetIcons();
-            var map = icons.ToDictionary(ic => ic.Name, ic => ic.Position, StringComparer.OrdinalIgnoreCase);
+            var map = new Dictionary<string, PointI>(icons.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var ic in icons)
+            {
+                // Icons parked off-screen by collapse must not overwrite their pre-collapse
+                // position in the saved layout — expanding restores from the collapse store, and
+                // the saved layout must keep matching what the user sees when they expand.
+                if (_host.IsCollapsed(GroupTitle(ic))) continue;
+                map[ic.Name] = ic.Position;
+            }
             if (Same(map, _lastSaved)) return;
             DesktopLayoutStore.Save(LayoutFilePath, map);
             _lastSaved = map;

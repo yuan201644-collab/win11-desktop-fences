@@ -163,7 +163,8 @@ public sealed class FenceWindow : Window
     }
 
     /// <summary>Positions the fence over a cluster's bounds (screen px → DIPs per this window's DPI) and lays out its visuals.
-/// When <paramref name="collapsed"/> the box shrinks to a thin title-band tab (icons underneath stay in place).</summary>
+    /// When <paramref name="collapsed"/> the box shrinks to a thin title-band tab (the controller has already
+    /// parked the cluster's real icons off-screen, so the tab is all that remains on the desktop).</summary>
     public void Render(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed)
     {
         double sx = GetScaleX(), sy = GetScaleY();
@@ -197,7 +198,9 @@ public sealed class FenceWindow : Window
     public void SetIconCount(int count)
     {
         _boxCount = count;
-        _title.Text = $"{ClusterTitle} · {count}";
+        // A collapsed tab carries no icons (they are parked off-screen), so showing "· 0" would
+        // be misleading — the tab keeps just the box title.
+        _title.Text = count > 0 ? $"{ClusterTitle} · {count}" : ClusterTitle;
     }
 
     /// <summary>Recolors box/header/title from the current palette. Cheap, for live preview.</summary>
