@@ -11,11 +11,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <!-- App icon for the .exe and the WPF window. Sourced as a Resource so the runtime can
-         load it from pack://application:,,,/app.ico for the NotifyIcon as well. -->
+    <!-- App icon for the .exe only. WPF resource packaging happens below; the duplicate entry used
+         to live in <PropertyGroup> as <Resource>app.ico</Resource> which MSBuild silently ignored,
+         causing a XamlParseException ("找不到资源 app.ico") at startup. -->
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Resource>app.ico</Resource>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- A bare <Resource>app.ico</Resource> in <PropertyGroup> is NOT valid MSBuild and is dropped, so
+         the icon never reached the WPF resource manifest and pack://application:,,,/app.ico failed
+         at Window ctor time. Use the proper ItemGroup form so both pack:// and NotificationIconIcon
+         can resolve the icon. -->
+    <Resource Include="app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- WinForms/Drawing global usings collide with WPF (Application, MessageBox, Color, Brushes).
