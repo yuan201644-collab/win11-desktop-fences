@@ -484,6 +484,7 @@ public sealed class FenceOverlayController : IDisposable
     private void OnCollapseToggled(string title)
     {
         bool collapsed = _host.ToggleCollapse(title);
+        TraceLog($"[toggle] '{title}' → {(collapsed ? "collapse" : "expand")}");
         if (collapsed)
         {
             // CollapseHide can fail (no icons matched / provider unavailable). In that case the
@@ -570,6 +571,7 @@ public sealed class FenceOverlayController : IDisposable
         }
         _hiddenIcons[title] = originals;
         _tabBounds[title] = TabBounds(icons, sx, sy);
+        TraceLog($"[collapse] '{title}': parked {originals.Count} icon(s) off-screen");
         return true;
     }
 
@@ -682,6 +684,8 @@ public sealed class FenceOverlayController : IDisposable
 
         if (missing > 0 || failed > 0)
             TraceLog($"[expand] '{title}' INCOMPLETE: restored={originals.Count - missing - failed} missing={missing} failed={failed}");
+        else
+            TraceLog($"[expand] '{title}': restored {originals.Count} icon(s) to original positions");
         _hiddenIcons.Remove(title);
         _tabBounds.Remove(title);
         return true;
