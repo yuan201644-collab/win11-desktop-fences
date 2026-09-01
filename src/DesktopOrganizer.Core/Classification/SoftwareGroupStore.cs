@@ -44,8 +44,16 @@ public static class SoftwareGroupStore
         }
     }
 
+    /// <summary>
+    /// Writes the rules to disk. Keywords are normalized first (trimmed, lowercased, empties
+    /// dropped) because <see cref="SoftwarePurposeClassifier"/> lowercases only the haystack and
+    /// then compares keywords ordinally — a keyword typed as "Word" in the rule editor would
+    /// otherwise never match. Mutates <paramref name="config"/> so the live object and the file
+    /// can never disagree about what a keyword is.
+    /// </summary>
     public static void Save(string filePath, SoftwareGroupingConfig config)
     {
+        Normalize(config);
         var dir = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         File.WriteAllText(filePath, JsonSerializer.Serialize(config, Options));

@@ -1,4 +1,4 @@
-# 一键发布 Windows x64 单文件版本。
+﻿# 一键发布 Windows x64 单文件版本。
 # 用法：
 #   .\publish.ps1                    # 发布到仓库根目录的 .\run 下
 #   .\publish.ps1 -Output D:\out      # 发布到指定目录

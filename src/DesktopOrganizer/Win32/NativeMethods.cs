@@ -95,6 +95,9 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
 
+    [DllImport("user32.dll")]
+    internal static extern uint GetDoubleClickTime();
+
     // LVITEMW (minimal, fields we use)
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct LVITEMW

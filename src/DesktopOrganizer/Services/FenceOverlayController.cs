@@ -31,11 +31,13 @@ public sealed class FenceOverlayController : IDisposable
     private readonly SysListView32Provider _provider;
     private readonly ClassifierEngine _engine = new();
     private readonly ClassifierConfig _config = new();
-    private readonly SoftwareGroupingConfig _grouping = SoftwareGroupStore.Load(SoftwareGroupStore.DefaultFilePath);
+    private SoftwareGroupingConfig _grouping = SoftwareGroupStore.Load(SoftwareGroupStore.DefaultFilePath);
     private readonly DesktopLayoutService _layout;
     private readonly FenceHost _host;
     private readonly DispatcherTimer _timer;
+    private FenceCategoryConfig _categories;
     private bool _arranged;
+    private FenceSortMode _sortMode;
     private IReadOnlyDictionary<string, PointI> _lastSaved = new Dictionary<string, PointI>();
     // Last seen icon index→position and shell-foreground state; lets RefreshOverlay skip the
     // re-render when nothing changed, so the layered fence windows don't flash every tick.
@@ -59,19 +61,35 @@ public sealed class FenceOverlayController : IDisposable
     // produce no clusters, so "empty boxes" are hidden automatically instead of rendering an
     // empty outline.
     private static readonly string[] KindBoxes = { "文件夹", "文件", "其他" };
-    private string[] BoxOrder => _grouping.Groups.Select(g => g.Title)
+
+    /// <summary>Every box title in its natural (un-reordered) sequence.</summary>
+    private string[] BaseBoxTitles => _grouping.Groups.Select(g => g.Title)
         .Append(SoftwarePurposeClassifier.FallbackTitle)
         .Concat(KindBoxes).ToArray();
+
+    /// <summary>
+    /// All box titles in their current display order — what the settings UI lists. Unlisted-in-config
+    /// titles keep their natural place, so a box added later still shows up.
+    /// </summary>
+    public IReadOnlyList<string> AvailableBoxTitles =>
+        FenceCategoryConfig.SortByPreference(BaseBoxTitles, _categories.Order);
+
+    /// <summary>The titles actually drawn: display order minus anything the user hid.</summary>
+    private string[] BoxOrder => AvailableBoxTitles.Where(t => !_categories.IsHidden(t)).ToArray();
 
     public FenceOverlayController()
     {
         _insets = FenceInsetStore.Load(FenceInsetFilePath);
+        _sortMode = FenceSortStore.Load(SortFilePath);
+        _categories = FenceCategoryStore.Load(CategoryFilePath);
         _provider = new SysListView32Provider();
         _layout = new DesktopLayoutService(_provider, _engine, _config);
         _host = new FenceHost();
         _host.DragStarted += OnDragStarted;
         _host.DragMoved += OnDragMoved;
         _host.DragEnded += OnDragEnded;
+        _host.CollapseToggled += OnCollapseToggled;
+        _host.SetInitialCollapsed(FenceCollapseStore.Load(CollapseFilePath));
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _timer.Tick += (_, _) => RefreshOverlay();
     }
@@ -99,6 +117,69 @@ public sealed class FenceOverlayController : IDisposable
             try { FenceInsetStore.Save(FenceInsetFilePath, _insets); } catch (Exception) { /* best-effort */ }
             ForceRefresh();
         }
+    }
+
+    /// <summary>In-fence ordering. Persisted; a re-arrange picks it up via <see cref="ArrangeAndShow"/>.</summary>
+    public FenceSortMode SortMode
+    {
+        get => _sortMode;
+        set
+        {
+            _sortMode = value;
+            try { FenceSortStore.Save(SortFilePath, _sortMode); } catch (Exception) { /* best-effort */ }
+        }
+    }
+
+    /// <summary>
+    /// A copy of the live grouping rules for the rule editor to mutate. It is a copy on purpose:
+    /// typing in a title/keyword box must not change the running overlay until the user presses
+    /// 保存并应用, otherwise a half-typed edit would silently reclassify the whole desktop.
+    /// </summary>
+    public SoftwareGroupingConfig Grouping => new()
+    {
+        Groups = _grouping.Groups.Select(g => new SoftwareGroup(g.Title, g.Keywords)).ToList(),
+    };
+
+    /// <summary>A copy of the current box visibility/order settings (what the category manager edits).</summary>
+    public FenceCategoryConfig Categories => new()
+    {
+        Order = new List<string>(_categories.Order),
+        Hidden = new List<string>(_categories.Hidden),
+    };
+
+    /// <summary>
+    /// Swaps in a user-edited grouping config, persists it, and redraws the box titles immediately.
+    /// Does NOT re-arrange icon positions — call <see cref="ArrangeAndShow"/> first for new boxes to land.
+    /// </summary>
+    public void SetGrouping(SoftwareGroupingConfig cfg)
+    {
+        _grouping = cfg ?? SoftwareGroupStore.Default();
+        try { SoftwareGroupStore.Save(SoftwareGroupStore.DefaultFilePath, _grouping); }
+        catch (Exception) { /* best-effort */ }
+        _layout.SetGrouping(_grouping);
+        // The box list just changed — drop any hidden/ordered titles that no longer exist.
+        SetCategories(_categories);
+        RebuildGroupTitles();
+        ForceRefresh();
+    }
+
+    /// <summary>
+    /// Applies the category manager's choices: which boxes are drawn and in what order. Titles that
+    /// no longer exist (a deleted group) are dropped so the saved file can't accumulate ghosts.
+    /// Hidden boxes simply aren't drawn — their icons stay exactly where the user left them.
+    /// </summary>
+    public void SetCategories(FenceCategoryConfig cfg)
+    {
+        var incoming = cfg ?? FenceCategoryConfig.Default;
+        var known = new HashSet<string>(BaseBoxTitles, StringComparer.OrdinalIgnoreCase);
+        _categories = new FenceCategoryConfig
+        {
+            Order = incoming.Order.Where(known.Contains).ToList(),
+            Hidden = incoming.Hidden.Where(known.Contains).ToList(),
+        };
+        try { FenceCategoryStore.Save(CategoryFilePath, _categories); }
+        catch (Exception) { /* best-effort */ }
+        ForceRefresh();
     }
 
     // Primary monitor in virtual-screen space. On this machine a secondary monitor sits
@@ -146,7 +227,7 @@ public sealed class FenceOverlayController : IDisposable
         {
             // Layout inside a margin so no icon sits flush against (or over) a screen edge;
             // the overlay below still renders across the full screen.
-            _layout.ArrangeIntoFence(new RectI(x + LayoutMargin, y + LayoutMargin, w - LayoutMargin * 2, h - LayoutMargin * 2), maxRows);
+            _layout.ArrangeIntoFence(new RectI(x + LayoutMargin, y + LayoutMargin, w - LayoutMargin * 2, h - LayoutMargin * 2), maxRows, _sortMode);
         }
         catch (DesktopAutoArrangeException)
         {
@@ -307,6 +388,15 @@ public sealed class FenceOverlayController : IDisposable
         RefreshOverlay();
     }
 
+    /// <summary>Flips a fence's collapsed state, persists the set, and redraws so the box shrinks to a tab.</summary>
+    private void OnCollapseToggled(string title)
+    {
+        _host.ToggleCollapse(title);
+        try { FenceCollapseStore.Save(CollapseFilePath, _host.CollapsedTitles); }
+        catch (Exception) { /* best-effort */ }
+        ForceRefresh();
+    }
+
     /// <summary>
     /// Recomputes each icon's box title (software by purpose) so the overlay matches the
     /// placement. Best-effort: if target resolution fails we fall back to kind-only titles.
@@ -351,6 +441,18 @@ public sealed class FenceOverlayController : IDisposable
     private static string FenceInsetFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-inset.json");
+
+    private static string CollapseFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "fence-collapse.json");
+
+    private static string SortFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "fence-sort.json");
+
+    private static string CategoryFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "fence-category.json");
 
     /// <summary>
     /// Persists the desktop's current icon positions. Best-effort: a transient failure is

@@ -5,25 +5,66 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:DesktopOrganizer"
         mc:Ignorable="d"
-        Title="MainWindow" Height="580" Width="800">
+        Title="桌面图标整理" Height="700" Width="820">
     <Grid>
-        <!-- M2 PoC debug button — remove in M6 -->
-        <Button Name="ArrangeDebugButton" Content="Arrange (M2 PoC)" Click="ArrangeDebugButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10,10,0,0" />
-        <Button Name="GroupButton" Content="整理并显示分组" Click="GroupButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="150,10,0,0" />
-        <Button Name="RestoreButton" Content="恢复上次布局" Click="RestoreButton_Click" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="290,10,0,0" />
-        <TextBlock x:Name="SavedHint" Text="已保存" FontSize="13" Foreground="#2E7D32" FontWeight="SemiBold"
-                   HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,52,16,0" Visibility="Collapsed" />
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
-        <!-- Fence color tuning; rows are built in code-behind (one per OverlayAppearance channel). -->
-        <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12,46,0,0"
-                Padding="10,10,10,8" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
-            <StackPanel x:Name="ColorSection" />
-        </Border>
+        <!-- Actions + the transient "已保存" hint. -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="12,12,12,8">
+            <Button Name="GroupButton" Content="整理并显示分组" Click="GroupButton_Click" Padding="10,4,10,4" />
+            <Button Name="RestoreButton" Content="恢复上次布局" Click="RestoreButton_Click" Padding="10,4,10,4" Margin="8,0,0,0" />
+            <TextBlock x:Name="SavedHint" Text="已保存" FontSize="13" Foreground="#2E7D32" FontWeight="SemiBold"
+                       VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed" />
+        </StackPanel>
 
-        <!-- Box edge padding (how far each box edge sits outside its icons); built in code-behind. -->
-        <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12,330,0,0"
-                Padding="10,10,10,8" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
-            <StackPanel x:Name="InsetSection" />
-        </Border>
+        <!-- Every settings block lives in one scroll column, so adding a section never pushes
+             the rest off the bottom of a fixed-height window. -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Margin="12,0,12,12">
+            <StackPanel>
+                <!-- Fence color tuning; rows are built in code-behind (one per OverlayAppearance channel). -->
+                <Border Padding="10,10,10,8" Margin="0,0,0,10" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
+                    <StackPanel>
+                        <TextBlock Text="配色" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <StackPanel x:Name="ColorSection" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Box edge padding (how far each box edge sits outside its icons) + in-fence ordering. -->
+                <Border Padding="10,10,10,8" Margin="0,0,0,10" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
+                    <StackPanel>
+                        <TextBlock Text="框边距与排序" FontWeight="SemiBold" Margin="0,0,0,6" />
+                        <StackPanel x:Name="InsetSection" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Category manager: which boxes are drawn, and in what order. -->
+                <Border Padding="10,10,10,8" Margin="0,0,0,10" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
+                    <StackPanel>
+                        <TextBlock Text="分类显示" FontWeight="SemiBold" Margin="0,0,0,2" />
+                        <TextBlock Text="取消勾选即隐藏该框（图标位置不动）；上下箭头调整框的排列顺序。"
+                                   FontSize="12" Foreground="#666666" Margin="0,0,0,6" />
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="CategorySection" />
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+
+                <!-- Rule editor: list/edit the purpose boxes and their keywords. -->
+                <Border Padding="10,10,10,8" BorderBrush="#22000000" BorderThickness="1" CornerRadius="6">
+                    <StackPanel>
+                        <TextBlock Text="分组规则" FontWeight="SemiBold" Margin="0,0,0,2" />
+                        <TextBlock Text="关键字用逗号分隔；命中的快捷方式会归入该框。"
+                                   FontSize="12" Foreground="#666666" Margin="0,0,0,6" />
+                        <ScrollViewer MaxHeight="170" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="RuleSection" />
+                        </ScrollViewer>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
     </Grid>
 </Window>

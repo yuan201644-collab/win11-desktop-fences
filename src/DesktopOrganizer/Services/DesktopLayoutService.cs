@@ -1,5 +1,9 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using DesktopOrganizer.Core.Classification;
+using DesktopOrganizer.Core.Config;
 using DesktopOrganizer.Core.Layout;
 using DesktopOrganizer.Core.Models;
 using DesktopOrganizer.Win32;
@@ -11,7 +15,7 @@ public sealed class DesktopLayoutService
     private readonly IDesktopIconProvider _provider;
     private readonly ClassifierEngine _engine;
     private readonly ClassifierConfig _config;
-    private readonly SoftwareGroupingConfig _grouping;
+    private SoftwareGroupingConfig _grouping;
 
     public DesktopLayoutService(IDesktopIconProvider provider, ClassifierEngine engine, ClassifierConfig config)
     {
@@ -20,6 +24,10 @@ public sealed class DesktopLayoutService
         _config = config;
         _grouping = SoftwareGroupStore.Load(SoftwareGroupStore.DefaultFilePath);
     }
+
+    /// <summary>Swaps in a (possibly user-edited) grouping config with no re-layout until ArrangeIntoFence runs.</summary>
+    public void SetGrouping(SoftwareGroupingConfig grouping)
+        => _grouping = grouping ?? SoftwareGroupStore.Default();
 
     /// <summary>
     /// Classifies a set of icons without touching their positions. Reused by the
@@ -38,15 +46,17 @@ public sealed class DesktopLayoutService
         return result;
     }
 
-    public IReadOnlyList<(DesktopIcon Icon, Category Category, PointI Target)> ArrangeIntoFence(RectI fence, int maxRows)
+    public IReadOnlyList<(DesktopIcon Icon, Category Category, PointI Target)> ArrangeIntoFence(
+        RectI fence, int maxRows, FenceSortMode sort = FenceSortMode.Name)
     {
         if (!_provider.IsAvailable) return new List<(DesktopIcon, Category, PointI)>();
         var icons = _provider.GetIcons();
         var classified = ClassifyAll(icons);
 
         // Group by on-screen box (软件按用途拆成 办公/开发/影音/系统/其他 小框;文件夹/文件/其他各一个),
-        // then name. Software needs its resolved target exe to tell purpose apart, so we resolve
-        // link targets here too — placement and overlay must agree on the same box labels.
+        // then by the chosen in-fence ordering. Software needs its resolved target exe to tell
+        // purpose apart, so we resolve link targets here too — placement and overlay must agree on
+        // the same box labels.
         var items = classified
             .Select(c => new
             {
@@ -59,9 +69,15 @@ public sealed class DesktopLayoutService
                 var box = BoxGrouping.FromEntry(_grouping, x.Icon.Name, x.Icon.Path, x.Link);
                 return (x.Icon, x.Category, Box: box);
             })
-            .OrderBy(x => x.Box.Order)
-            .ThenBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .OrderBy(x => x.Box.Order);
+
+        var ordered = sort switch
+        {
+            FenceSortMode.Type => items.ThenBy(x => x.Category).ThenBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase),
+            FenceSortMode.Modified => items.ThenBy(x => ModifiedTimeUtc(x.Icon)).ThenBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase),
+            _ => items.ThenBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase),
+        };
+        var sortedItems = ordered.ToList();
 
         var cellW = _provider.IconSpacingX;
         var cellH = _provider.IconSpacingY;
@@ -80,8 +96,8 @@ public sealed class DesktopLayoutService
 
         // items is sorted by box order, so grouping by box title preserves that order and
         // concatenating the groups reproduces `items` — targets line up with `items[i]` below.
-        var groups = items.GroupBy(x => x.Box.Title).Select(g => g.ToList()).ToList();
-        var targets = new List<PointI>(items.Count);
+        var groups = sortedItems.GroupBy(x => x.Box.Title).Select(g => g.ToList()).ToList();
+        var targets = new List<PointI>(sortedItems.Count);
         var cursorX = left; var cursorY = top; var columnMaxW = 0;
 
         foreach (var group in groups)
@@ -112,13 +128,26 @@ public sealed class DesktopLayoutService
         }
 
         var report = new List<(DesktopIcon, Category, PointI)>();
-        for (var i = 0; i < items.Count && i < targets.Count; i++)
+        for (var i = 0; i < sortedItems.Count && i < targets.Count; i++)
         {
-            var (icon, category, _) = items[i];
+            var (icon, category, _) = sortedItems[i];
             _provider.SetPosition(icon.Index, targets[i]); // DesktopAutoArrangeException bubbles to caller
             report.Add((icon, category, targets[i]));
         }
         return report;
+    }
+
+    private static DateTime ModifiedTimeUtc(DesktopIcon icon)
+    {
+        try
+        {
+            if (icon.Path is null) return DateTime.MinValue;
+            return File.GetLastWriteTimeUtc(icon.Path);
+        }
+        catch (Exception)
+        {
+            return DateTime.MinValue;
+        }
     }
 
     /// <summary>

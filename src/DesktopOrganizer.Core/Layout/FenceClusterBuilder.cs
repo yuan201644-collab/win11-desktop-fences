@@ -8,7 +8,11 @@ namespace DesktopOrganizer.Core.Layout;
 /// the icon count, and the on-screen bounding box (screen pixel coordinates) that
 /// contains every icon's cell. Built by <see cref="FenceClusterBuilder"/>.
 /// </summary>
-public sealed record FenceCluster(string Title, int IconCount, RectI Bounds);
+public sealed record FenceCluster(string Title, int IconCount, RectI Bounds)
+{
+    /// <summary>Collapsed to a thin tab (title band only); icons stay in place, the box is not drawn.</summary>
+    public bool IsCollapsed { get; init; }
+}
 
 public static class FenceHeader
 {

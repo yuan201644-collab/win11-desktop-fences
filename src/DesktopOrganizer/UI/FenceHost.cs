@@ -18,7 +18,11 @@ namespace DesktopOrganizer.UI;
 public sealed class FenceHost
 {
     private readonly Dictionary<string, FenceWindow> _fences = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
     private OverlayAppearance _appearance = OverlayAppearance.Default;
+
+    /// <summary>Raised when a fence's header is double-clicked — flip its collapsed state.</summary>
+    public event Action<string>? CollapseToggled;
 
     /// <summary>Raised when a drag begins — snapshot the cluster's icon positions here.</summary>
     public event Action<string>? DragStarted;
@@ -65,9 +69,28 @@ public sealed class FenceHost
         {
             var win = GetWindow(cluster.Title);
             win.SetIconCount(cluster.IconCount);
-            win.Render(cluster.Bounds.Left, cluster.Bounds.Top, cluster.Bounds.Width, cluster.Bounds.Height, headerPx);
+            win.Render(cluster.Bounds.Left, cluster.Bounds.Top, cluster.Bounds.Width, cluster.Bounds.Height, headerPx,
+                IsCollapsed(cluster.Title));
             if (!win.IsVisible) win.Show();
         }
+    }
+
+    /// <summary>Seeds the remembered collapsed set (loaded from disk) at startup.</summary>
+    public void SetInitialCollapsed(IEnumerable<string> titles)
+    {
+        _collapsed.Clear();
+        foreach (var t in titles) _collapsed.Add(t);
+    }
+
+    public IReadOnlyList<string> CollapsedTitles => _collapsed.ToList();
+
+    public bool IsCollapsed(string title) => _collapsed.Contains(title);
+
+    /// <summary>Flips a fence's collapsed state and returns the new value.</summary>
+    public bool ToggleCollapse(string title)
+    {
+        if (!_collapsed.Add(title)) { _collapsed.Remove(title); return false; }
+        return true;
     }
 
     /// <summary>Clears the pool entirely (on large re-allocations). Kept for symmetry / future use.</summary>
@@ -85,6 +108,7 @@ public sealed class FenceHost
         win.ClusterDragStart += (t) => DragStarted?.Invoke(t);
         win.ClusterDrag += (t, dx, dy) => DragMoved?.Invoke(t, dx, dy);
         win.ClusterDragEnd += (t) => DragEnded?.Invoke(t);
+        win.TitleToggleCollapse += (t) => CollapseToggled?.Invoke(t);
         _fences.Add(title, win);
         return win;
     }

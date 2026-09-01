@@ -1,26 +1,17 @@
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
 using System.IO;
-using System.Text;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
 using DesktopOrganizer.Core.Classification;
 using DesktopOrganizer.Core.Config;
-using DesktopOrganizer.Core.Layout;
-using DesktopOrganizer.Core.Models;
 using DesktopOrganizer.Services;
-using DesktopOrganizer.Win32;
 using Application = System.Windows.Application;
 using Forms = System.Windows.Forms;
-using MessageBox = System.Windows.MessageBox;
 
 namespace DesktopOrganizer;
 
@@ -32,8 +23,16 @@ public partial class MainWindow : Window
     private readonly FenceOverlayController _overlay;
     private readonly Forms.NotifyIcon _tray;
     private readonly List<ColorChannel> _colorChannels = new();
+    private SoftwareGroupingConfig _ruleConfig = new();
+    private readonly HashSet<string> _defaultGroupTitles = new(
+        SoftwareGroupStore.Default().Groups.Select(g => g.Title), StringComparer.OrdinalIgnoreCase);
+    // Category-manager draft: the box display order the user is building up, plus the titles they
+    // unchecked. Only pushed to the overlay (and disk) by ApplyCategories.
+    private List<string> _categoryOrder = new();
+    private readonly HashSet<string> _hiddenBoxes = new(StringComparer.OrdinalIgnoreCase);
     private OverlayAppearance _appearance = OverlayAppearance.Default;
     private bool _exiting;
+    private bool _hasArranged;
     private readonly System.Windows.Threading.DispatcherTimer _savedTimer;
     // Fences are foreground overlay sheets layered ON TOP of the real icons, so a crash-opaque box
     // body would hide the icons underneath. Cap the fill's alpha so it can get very solid but never
@@ -56,6 +55,8 @@ public partial class MainWindow : Window
 
         BuildColorSection();
         BuildInsetSection();
+        BuildRuleSection();
+        BuildCategorySection();
 
         // Closing the window (×) no longer quits — the app keeps running in the background so the
         // overlay can follow the desktop. The tray icon is the way back in (and the way out).
@@ -179,11 +180,39 @@ public partial class MainWindow : Window
     private void BuildInsetSection()
     {
         InsetSection.Children.Clear();
+        InsetSection.Children.Add(BuildSortRow());
         var b = _overlay.BoxInsets;
         InsetSection.Children.Add(BuildInsetRow("左边距", b.Left, v => { _overlay.BoxInsets = _overlay.BoxInsets with { Left = v }; FlashSaved(); }));
         InsetSection.Children.Add(BuildInsetRow("右边距", b.Right, v => { _overlay.BoxInsets = _overlay.BoxInsets with { Right = v }; FlashSaved(); }));
         InsetSection.Children.Add(BuildInsetRow("上边距", b.Top, v => { _overlay.BoxInsets = _overlay.BoxInsets with { Top = v }; FlashSaved(); }));
         InsetSection.Children.Add(BuildInsetRow("下边距", b.Bottom, v => { _overlay.BoxInsets = _overlay.BoxInsets with { Bottom = v }; FlashSaved(); }));
+    }
+
+    /// <summary>Dropdown choosing the in-fence icon ordering; re-arranges live when a fence is already drawn.</summary>
+    private UIElement BuildSortRow()
+    {
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 2, 0, 6),
+        };
+        row.Children.Add(new TextBlock { Text = "排序", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+
+        var cb = new ComboBox { Width = 150, VerticalAlignment = VerticalAlignment.Center };
+        cb.Items.Add("按名称");
+        cb.Items.Add("按类型");
+        cb.Items.Add("按修改时间");
+        cb.SelectedIndex = (int)_overlay.SortMode;
+        cb.SelectionChanged += (_, _) =>
+        {
+            if (cb.SelectedIndex < 0) return;
+            _overlay.SortMode = (FenceSortMode)cb.SelectedIndex;
+            FlashSaved();
+            if (_hasArranged) _overlay.ArrangeAndShow();
+        };
+        row.Children.Add(cb);
+        return row;
     }
 
     private UIElement BuildInsetRow(string label, int initial, Action<int> onChanged)
@@ -211,6 +240,150 @@ public partial class MainWindow : Window
         slider.Value = initial;
         valueText.Text = initial.ToString();
         return row;
+    }
+
+    /// <summary>
+    /// Builds the rule editor: one row per purpose box (title + keywords + delete), an add button,
+    /// and a commit "保存并应用". Editing mutates a local draft; commit pushes it live via
+    /// <see cref="FenceOverlayController.SetGrouping"/> and, if a layout is already drawn, re-arranges.
+    /// Default seed boxes are protected from deletion.
+    /// </summary>
+    private void BuildRuleSection()
+    {
+        _ruleConfig = _overlay.Grouping;
+        RebuildRuleRows();
+    }
+
+    private void RebuildRuleRows()
+    {
+        RuleSection.Children.Clear();
+
+        foreach (var group in _ruleConfig.Groups)
+            RuleSection.Children.Add(BuildGroupRow(group, deletable: !_defaultGroupTitles.Contains(group.Title)));
+
+        var addRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 2) };
+        var add = new Button { Content = "+ 新增分组", Width = 90, HorizontalAlignment = HorizontalAlignment.Left };
+        add.Click += (_, _) => AddGroup();
+        addRow.Children.Add(add);
+        RuleSection.Children.Add(addRow);
+
+        var applyRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 2) };
+        var apply = new Button { Content = "保存并应用", Width = 100, HorizontalAlignment = HorizontalAlignment.Left };
+        apply.Click += (_, _) => ApplyGrouping();
+        applyRow.Children.Add(apply);
+        RuleSection.Children.Add(applyRow);
+    }
+
+    private UIElement BuildGroupRow(SoftwareGroup group, bool deletable)
+    {
+        var titleBox = new TextBox { Text = group.Title, Width = 88, VerticalContentAlignment = VerticalAlignment.Center };
+        var kwBox = new TextBox { Text = string.Join("，", group.Keywords), Width = 250, VerticalContentAlignment = VerticalAlignment.Center };
+        titleBox.TextChanged += (_, _) => group.Title = titleBox.Text.Trim();
+        kwBox.TextChanged += (_, _) => group.Keywords = new List<string>(KeywordsParser.Split(kwBox.Text));
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 3) };
+        row.Children.Add(titleBox);
+        row.Children.Add(new TextBlock { Text = "关键字", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 4, 0) });
+        row.Children.Add(kwBox);
+
+        var del = new Button { Content = "删除", Width = 44, Margin = new Thickness(6, 0, 0, 0), IsEnabled = deletable };
+        if (deletable)
+        {
+            var captured = group;
+            del.Click += (_, _) => { _ruleConfig.Groups.Remove(captured); RebuildRuleRows(); };
+        }
+        row.Children.Add(del);
+        return row;
+    }
+
+    private void AddGroup()
+    {
+        _ruleConfig.Groups.Add(new SoftwareGroup("新分组", Array.Empty<string>()));
+        RebuildRuleRows();
+    }
+
+    private void ApplyGrouping()
+    {
+        _overlay.SetGrouping(_ruleConfig);
+        // Saving normalized the keywords (trimmed + lowercased), so re-read them into the rows;
+        // boxes may also have been added/removed, so the category list is rebuilt from scratch.
+        BuildRuleSection();
+        BuildCategorySection();
+        if (_hasArranged) _overlay.ArrangeAndShow();
+        FlashSaved();
+    }
+
+    /// <summary>
+    /// Builds the category manager: one row per fence box with a visibility checkbox and up/down
+    /// buttons for the display order. Edits mutate a local draft; "保存并应用" pushes them through
+    /// <see cref="FenceOverlayController.SetCategories"/> and redraws the overlay.
+    /// </summary>
+    private void BuildCategorySection()
+    {
+        _categoryOrder = new List<string>(_overlay.AvailableBoxTitles);
+        _hiddenBoxes.Clear();
+        foreach (var t in _overlay.Categories.Hidden) _hiddenBoxes.Add(t);
+        RebuildCategoryRows();
+    }
+
+    private void RebuildCategoryRows()
+    {
+        CategorySection.Children.Clear();
+
+        for (var i = 0; i < _categoryOrder.Count; i++)
+            CategorySection.Children.Add(BuildCategoryRow(_categoryOrder[i], i));
+
+        var footer = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 2) };
+        var apply = new Button { Content = "保存并应用", Width = 100, HorizontalAlignment = HorizontalAlignment.Left };
+        apply.Click += (_, _) => ApplyCategories();
+        footer.Children.Add(apply);
+        CategorySection.Children.Add(footer);
+    }
+
+    private UIElement BuildCategoryRow(string title, int index)
+    {
+        var box = new CheckBox
+        {
+            Content = title,
+            IsChecked = !_hiddenBoxes.Contains(title),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Width = 190,
+        };
+        box.Checked += (_, _) => _hiddenBoxes.Remove(title);
+        box.Unchecked += (_, _) => _hiddenBoxes.Add(title);
+
+        var up = new Button { Content = "↑", Width = 24, Margin = new Thickness(6, 0, 0, 0), IsEnabled = index > 0 };
+        var down = new Button { Content = "↓", Width = 24, Margin = new Thickness(4, 0, 0, 0), IsEnabled = index < _categoryOrder.Count - 1 };
+        up.Click += (_, _) => MoveCategory(index, -1);
+        down.Click += (_, _) => MoveCategory(index, 1);
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
+        row.Children.Add(box);
+        row.Children.Add(up);
+        row.Children.Add(down);
+        return row;
+    }
+
+    private void MoveCategory(int index, int delta)
+    {
+        var target = index + delta;
+        if (target < 0 || target >= _categoryOrder.Count) return;
+        (_categoryOrder[index], _categoryOrder[target]) = (_categoryOrder[target], _categoryOrder[index]);
+        RebuildCategoryRows();
+    }
+
+    private void ApplyCategories()
+    {
+        _overlay.SetCategories(new FenceCategoryConfig
+        {
+            Order = new List<string>(_categoryOrder),
+            Hidden = _categoryOrder.Where(_hiddenBoxes.Contains).ToList(),
+        });
+        // The controller drops titles that no longer exist — re-sync the draft so the rows match
+        // what is actually stored, instead of drifting out of step with the overlay.
+        _categoryOrder = new List<string>(_overlay.AvailableBoxTitles);
+        RebuildCategoryRows();
+        FlashSaved();
     }
 
     private void PickColor(ColorChannel channel)
@@ -268,85 +441,12 @@ public partial class MainWindow : Window
 
     // "整理并显示分组" — reposition icons into clusters then draw the labeled overlay.
     private void GroupButton_Click(object sender, RoutedEventArgs e)
-        => _overlay.ArrangeAndShow();
+    {
+        _hasArranged = true;
+        _overlay.ArrangeAndShow();
+    }
 
     // "恢复上次布局" — re-apply the last saved icon positions (clusters + manual tweaks).
     private void RestoreButton_Click(object sender, RoutedEventArgs e)
         => _overlay.RestoreSavedLayout();
-
-    // M2 PoC debug button — remove in M6
-    private void ArrangeDebugButton_Click(object sender, RoutedEventArgs e)
-    {
-        var logPath = AppContext.BaseDirectory + "m2-poc.log";
-        void Log(string line)
-        {
-            try { File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} {line}\r\n"); } catch (IOException) { /* best-effort */ }
-        }
-
-        Log("=== click ===");
-        try
-        {
-            using var provider = new SysListView32Provider();
-            Log($"ctor ok: IsAvailable={provider.IsAvailable}, Handle=0x{provider.Handle.ToInt64():X}, Count={provider.Count}, Spacing=({provider.IconSpacingX},{provider.IconSpacingY})");
-            var style = NativeMethods.GetWindowLong(provider.Handle, NativeMethods.GWL_STYLE);
-            Log($"GWL_STYLE=0x{style:X8}, AUTOARRANGE_bit={(style & NativeMethods.LVS_AUTOARRANGE) != 0}");
-            NativeMethods.GetWindowRect(provider.Handle, out var lv);
-            Log($"ListView rect: L={lv.Left},T={lv.Top},R={lv.Right},B={lv.Bottom} (W={lv.Right - lv.Left},H={lv.Bottom - lv.Top})");
-            var pX = NativeMethods.GetSystemMetrics(0); var pY = NativeMethods.GetSystemMetrics(1);
-            var vL = NativeMethods.GetSystemMetrics(76); var vT = NativeMethods.GetSystemMetrics(77);
-            var vW = NativeMethods.GetSystemMetrics(78); var vH = NativeMethods.GetSystemMetrics(79);
-            Log($"Screen: primary={pX}x{pY}, virtual=({vL},{vT})-({vL + vW},{vT + vH})");
-            if (!provider.IsAvailable)
-            {
-                Log("NOT AVAILABLE - desktop SysListView32 not found");
-                MessageBox.Show("IsAvailable=False：未找到桌面 SysListView32 窗口。\n日志: " + logPath, "M2 PoC", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            var icons = provider.GetIcons();
-            Log($"icons read = {icons.Count}");
-            foreach (var ic in icons)
-                Log($"  icon[{ic.Index}] '{ic.Name}' path={ic.Path ?? "(none)"} pos=({ic.Position.X},{ic.Position.Y})");
-
-            var engine = new ClassifierEngine();
-            var config = new ClassifierConfig();
-            var service = new DesktopLayoutService(provider, engine, config);
-
-            var count = provider.Count;
-            var maxRows = Math.Max(1, (int)(pY / (double)provider.IconSpacingY));
-            Log($"layout: count={count}, spacing=({provider.IconSpacingX},{provider.IconSpacingY}), maxRows={maxRows}");
-
-            var report = service.ArrangeIntoFence(new RectI(0, 0, pX, pY), maxRows);
-
-            foreach (var (icon, cat, tgt) in report)
-            {
-                var linkApp = icon.Path is not null ? DesktopShellEnumerator.LinkTargetAppFromPath(icon.Path) : null;
-                Log($"  [{cat}] icon[{icon.Index}] '{icon.Name}' path={icon.Path ?? "(none)"} linkApp={linkApp ?? "(null)"} → target=({tgt.X},{tgt.Y})");
-            }
-
-            var hist = report.GroupBy(r => r.Category).OrderBy(g => (int)g.Key)
-                .ToDictionary(g => g.Key, g => g.Count());
-            Log("category histogram:");
-            foreach (var kv in hist) Log($"  {kv.Key} = {kv.Value}");
-
-            var after = provider.GetIcons();
-            Log($"AFTER readback: {after.Count} icons");
-            foreach (var ic in after.Take(20))
-                Log($"  AFTER icon[{ic.Index}] '{ic.Name}' pos=({ic.Position.X},{ic.Position.Y})");
-            Log($"done: arranged {report.Count} icons; categories={hist.Count}");
-
-            var summary = string.Join("\n", hist.OrderBy(kv => (int)kv.Key).Select(kv => $"  {kv.Key}: {kv.Value}"));
-            MessageBox.Show($"Arranged {report.Count} desktop icons by category.\n\nCategories:\n{summary}\n\n日志: {logPath}", "M2 PoC", MessageBoxButton.OK);
-        }
-        catch (DesktopAutoArrangeException ex)
-        {
-            Log($"AutoArrange: {ex.Message}");
-            MessageBox.Show(ex.Message + "\n日志: " + logPath, "Cannot arrange (M2 PoC)", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        catch (Exception ex)
-        {
-            Log($"EX: {ex.GetType().Name}: {ex.Message}");
-            MessageBox.Show($"M2 PoC failed: {ex.GetType().Name}: {ex.Message}\n日志: {logPath}", "Cannot arrange (M2 PoC)", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
 }

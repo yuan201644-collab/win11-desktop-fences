@@ -28,6 +28,7 @@ public sealed class FenceWindow : Window
     private bool _dragging;
     private int _startX, _startY;
     private int _lastX, _lastY;
+    private DateTime _lastHeaderClick;
 
     /// <summary>The cluster box title this fence draws (used to route drags to the right icon group).</summary>
     public string ClusterTitle { get; }
@@ -40,6 +41,9 @@ public sealed class FenceWindow : Window
 
     /// <summary>Raises once when a drag ends (mouse up), so the controller can finalize and persist positions.</summary>
     public event Action<string>? ClusterDragEnd;
+
+    /// <summary>Raises when the header is double-clicked — the controller flips this box's collapsed state.</summary>
+    public event Action<string>? TitleToggleCollapse;
 
     public FenceWindow(string clusterTitle, OverlayAppearance appearance)
     {
@@ -131,19 +135,33 @@ public sealed class FenceWindow : Window
         }
     }
 
-    /// <summary>Positions the fence over a cluster's bounds (screen px → DIPs per this window's DPI) and lays out its visuals.</summary>
-    public void Render(int leftPx, int topPx, int widthPx, int heightPx, int headerPx)
+    /// <summary>Positions the fence over a cluster's bounds (screen px → DIPs per this window's DPI) and lays out its visuals.
+/// When <paramref name="collapsed"/> the box shrinks to a thin title-band tab (icons underneath stay in place).</summary>
+    public void Render(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed)
     {
         double sx = GetScaleX(), sy = GetScaleY();
         Left = leftPx / Math.Max(0.1, sx);
         Top = topPx / Math.Max(0.1, sy);
         Width = widthPx / Math.Max(0.1, sx);
-        Height = heightPx / Math.Max(0.1, sy);
 
-        _box.Width = Width;
-        _box.Height = Height;
-        _header.Width = Math.Max(0, Width - 3);
-        _header.Height = Math.Max(0, headerPx / Math.Max(0.1, sy) - 2);
+        double headerDip = headerPx / Math.Max(0.1, sy);
+        Height = collapsed ? Math.Max(1, headerDip) : heightPx / Math.Max(0.1, sy);
+
+        // Collapsed: hide the box body and keep just the header (title) spanning the tab width.
+        if (collapsed)
+        {
+            _box.Width = 0; // hide body: set size 0 so nothing draws behind the header
+            _box.Height = 0;
+            _header.Width = Math.Max(0, Width - 3);
+            _header.Height = headerDip - 2;
+        }
+        else
+        {
+            _box.Width = Width;
+            _box.Height = Height;
+            _header.Width = Math.Max(0, Width - 3);
+            _header.Height = headerDip - 2;
+        }
     }
 
     public void SetIconCount(int count)
@@ -172,6 +190,20 @@ public sealed class FenceWindow : Window
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        // Only the header reaches us (the body is HTTRANSPARENT), so a quick second press here is
+        // a header double-click — toggle collapse and cancel any pending drag so the box doesn't move.
+        var now = DateTime.UtcNow;
+        bool isDoubleClick = (now - _lastHeaderClick) < TimeSpan.FromMilliseconds(NativeMethods.GetDoubleClickTime());
+        _lastHeaderClick = now;
+        if (isDoubleClick)
+        {
+            _dragCandidate = false;
+            _dragging = false;
+            _lastHeaderClick = default;
+            TitleToggleCollapse?.Invoke(ClusterTitle);
+            return;
+        }
+
         if (!NativeMethods.GetCursorPos(out var pt)) return;
         _startX = _lastX = pt.X;
         _startY = _lastY = pt.Y;

@@ -2,6 +2,7 @@
 run/
 [Bb]in/
 [Oo]bj/
+bin_build/
 [Dd]ebug/
 [Rr]elease/
 x64/
