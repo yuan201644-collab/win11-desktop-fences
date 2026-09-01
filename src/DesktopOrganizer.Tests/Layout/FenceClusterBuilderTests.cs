@@ -102,6 +102,43 @@ public class FenceClusterBuilderTests
         Assert.True(b.Top > a.Bottom, "later cluster should sit below the first");
     }
 
+    [Fact]
+    public void ParkedIcon_DoesNotStretchBoundingBox()
+    {
+        // Repro of the "文件夹 title bar extends forever" bug: after expand, one icon can still
+        // report a parked coordinate (fold base -32000) when the refresh reads positions. One
+        // such point must NOT inflate the group's bounding box to ~32k px wide.
+        var cl = Assert.Single(Build(
+            ("文件夹", new PointI(0, 0)),
+            ("文件夹", new PointI(96, 0)),
+            ("文件夹", new PointI(-32000, -32000))));
+        // Bounds computed from the two visible icons only.
+        Assert.Equal(new RectI(-8, -8, 208, 112), cl.Bounds);
+        Assert.Equal(2, cl.IconCount);
+    }
+
+    [Fact]
+    public void AllIconsParked_YieldsNoCluster()
+    {
+        // A group whose every icon is parked off-screen must not produce an (invisible,
+        // screen-wide) box at all.
+        Assert.Empty(Build(
+            ("文件夹", new PointI(-32000, -32000)),
+            ("文件夹", new PointI(-32000 - 96, -32000))));
+    }
+
+    [Fact]
+    public void SecondaryMonitorNegativeCoords_AreNotTreatedAsParked()
+    {
+        // Dual-monitor: a left-positioned secondary monitor can legitimately sit at e.g. x=-1920,
+        // far above the -10000 parked threshold — those icons must keep participating in bounds.
+        var cl = Assert.Single(Build(
+            ("文件夹", new PointI(-1920, 100)),
+            ("文件夹", new PointI(-1824, 100))));
+        Assert.Equal(new RectI(-1928, 92, 208, 112), cl.Bounds);
+        Assert.Equal(2, cl.IconCount);
+    }
+
     private static bool Overlaps(RectI x, RectI y)
         => x.Left < y.Right && x.Right > y.Left && x.Top < y.Bottom && x.Bottom > y.Top;
 }

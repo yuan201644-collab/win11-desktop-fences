@@ -31,6 +31,13 @@ public static class FenceHeader
 /// </summary>
 public static class FenceClusterBuilder
 {
+    /// <summary>
+    /// Positions more negative than this on either axis are treated as parked/stranded
+    /// (fold parks icons at a -32000 base) and excluded from bounding-box math.
+    /// Shared threshold with the controller's RescueStrandedIcons.
+    /// </summary>
+    public const int ParkedThreshold = -10000;
+
     /// <param name="placed">Icon anchors, each tagged with its cluster group title.</param>
     /// <param name="cellWidth">Icon cell width in px (e.g. <c>IconSpacingX</c>).</param>
     /// <param name="cellHeight">Icon cell height in px (e.g. <c>IconSpacingY</c>).</param>
@@ -52,6 +59,13 @@ public static class FenceClusterBuilder
 
         var list = placed.Select(x => (x.Group, x.Position)).ToList();
         var clusters = new List<FenceCluster>();
+        if (list.Count == 0) return clusters;
+
+        // Parked/stranded icons sit far off-screen (fold base -32000, detection threshold -10000,
+        // matching RescueStrandedIcons). One such point in a group would stretch its bounding box
+        // to ~32k px wide — the "title bar extends forever" bug. Skip them; the next refresh,
+        // after explorer applies the restored positions, draws them back into the box.
+        list.RemoveAll(p => p.Position.X < ParkedThreshold || p.Position.Y < ParkedThreshold);
         if (list.Count == 0) return clusters;
 
         // Minimum vertical separation between adjacent boxes so they never fuse into one blob,
