@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using Microsoft.Win32.SafeHandles;
 
 namespace DesktopOrganizer.Win32;
@@ -88,10 +89,20 @@ internal sealed class LvItemMarshaller : IDisposable
 
     private static IntPtr Send(IntPtr hwnd, uint msg, IntPtr w, IntPtr l)
     {
-        if (NativeMethods.SendMessageTimeout(hwnd, msg, w, l,
-                NativeMethods.SMTO_ABORTIFHUNG | NativeMethods.SMTO_NORMAL, 2000, out var result) == IntPtr.Zero)
-            throw new Win32Exception(Marshal.GetLastWin32Error());
-        return result;
+        const int ERROR_TIMEOUT = 1460; // explorer was momentarily busy/hung during a bulk re-layout
+        int lastError = 0;
+        // A transient timeout must not abort an entire arrange/collapse — retry a few times.
+        // SetItemPosition/GetItemPosition are idempotent on retry (same target), so repeating is safe.
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            if (NativeMethods.SendMessageTimeout(hwnd, msg, w, l,
+                    NativeMethods.SMTO_ABORTIFHUNG | NativeMethods.SMTO_NORMAL, 2000, out var result) != IntPtr.Zero)
+                return result;
+            lastError = Marshal.GetLastWin32Error();
+            if (lastError != ERROR_TIMEOUT) break; // a non-timeout failure is real — don't spin
+            Thread.Sleep(100);
+        }
+        throw new Win32Exception(lastError);
     }
 
     internal string RoundTripString(string value)
