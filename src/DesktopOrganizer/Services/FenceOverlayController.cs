@@ -336,6 +336,12 @@ public sealed class FenceOverlayController : IDisposable
         // Don't disturb the mesh mid-drag — the user's hand is on the icons.
         if (_dragging) return;
 
+        // Safety net: a fence can only be drawn as a collapsed tab when BOTH its parked-icon record
+        // and its tab rect exist. If either is missing the tab would be invisible while its icons
+        // stay stranded off-screen — the "collapse→expand→collapse makes a box vanish" symptom. Expand
+        // any such fence back (rescuing the parked icons) instead of leaving it in that dead state.
+        ReconcileCollapsed();
+
         // Idempotent: if neither the icon positions nor the shell-foreground visibility changed,
         // re-rendering the layered windows would just make them flash — skip it entirely.
         var icons = _provider.GetIcons();
@@ -701,60 +707,70 @@ public sealed class FenceOverlayController : IDisposable
         // Build the live lookup by a STABLE, UNIQUE key (the file path), NOT the display name:
         // two icons can share a display name (e.g. two "健身助手" shortcuts), and ToDictionary on
         // names threw ArgumentException — which used to crash expand before a single icon moved.
-        Dictionary<string, DesktopIcon> byKey;
-        try { byKey = BuildKeyIndex(_provider.GetIcons()); }
-        catch (Exception ex)
+        // Retry the restore a few times. GetIcons() can transiently miss icons while Explorer is
+        // mid-refresh (e.g. right after the auto-arrange style flip's 200ms sleep): an icon that is
+        // momentarily absent would otherwise be counted as "gone" and stranded off-screen — the root
+        // cause of "collapse→expand→collapse makes a box vanish". Re-reading catches the flicker so a
+        // stable desktop restores everything and the record drops cleanly.
+        int restored = 0, missing = 0, failed = 0;
+        var pending = new HashSet<string>(originals.Keys, StringComparer.OrdinalIgnoreCase);
+        for (int attempt = 0; attempt < 3 && pending.Count > 0; attempt++)
         {
-            TraceLog($"[expand] '{title}' REFUSED: could not read desktop icons: {ex.Message}");
-            return false;
-        }
-        if (byKey.Count == 0)
-        {
-            // Explorer likely restarted under us, so GetIcons can't see the desktop yet. Dropping
-            // the record here would strand the parked icons off-screen with no way back — stay
-            // collapsed and let the user retry once the shell is back.
-            TraceLog($"[expand] '{title}' REFUSED: ListView returned 0 icons (explorer restart?)");
-            return false;
-        }
+            if (attempt > 0) System.Threading.Thread.Sleep(160);
 
-        int missing = 0, restored = 0, failed = 0;
-        foreach (var (key, pos) in originals)
-        {
-            if (!byKey.TryGetValue(key, out var ic))
-            {
-                // Keyed by path, a renamed icon still matches (its path is unchanged); if it's
-                // genuinely gone, log it so a repro has evidence instead of silent invisibility.
-                missing++;
-                TraceLog($"[expand] '{title}' MISSING icon '{key}'");
-                continue;
-            }
-            try { _provider.SetPosition(ic.Index, pos); restored++; }
-            catch (DesktopAutoArrangeException)
-            {
-                // Auto-arrange re-engaged mid-restore (rare style reset). Try to clear it once and
-                // retry this icon; only give up — and KEEP the record — if it still fails, so the
-                // remaining icons are never stranded off-screen with no way back.
-                TraceLog($"[expand] '{title}' auto-arrange re-engaged at '{key}' — re-disabling");
-                if (_provider.DisableAutoArrange())
-                {
-                    System.Threading.Thread.Sleep(150);
-                    try { _provider.SetPosition(ic.Index, pos); restored++; continue; }
-                    catch (Exception ex) { TraceLog($"[expand] '{title}' retry FAILED '{key}' @{pos}: {ex.Message}"); }
-                }
-                failed++;
-                break;
-            }
+            // Build the live lookup by a STABLE, UNIQUE key (the file path), NOT the display name:
+            // two icons can share a display name (e.g. two "健身助手" shortcuts), and ToDictionary on
+            // names threw ArgumentException — which used to crash expand before a single icon moved.
+            Dictionary<string, DesktopIcon> byKey;
+            try { byKey = BuildKeyIndex(_provider.GetIcons()); }
             catch (Exception ex)
             {
-                // Non-auto-arrange error on this icon — log it but keep going to rescue the rest.
-                failed++;
-                TraceLog($"[expand] '{title}' FAILED '{key}' @{pos}: {ex.Message}");
+                TraceLog($"[expand] '{title}' REFUSED: could not read desktop icons (attempt {attempt + 1}): {ex.Message}");
+                return false;
             }
+            if (byKey.Count == 0)
+            {
+                // Explorer likely restarted under us, so GetIcons can't see the desktop yet. Dropping
+                // the record here would strand the parked icons off-screen with no way back — stay
+                // collapsed and let the user retry once the shell is back.
+                TraceLog($"[expand] '{title}' REFUSED: ListView returned 0 icons (explorer restart?)");
+                return false;
+            }
+
+            foreach (var key in pending.ToList())
+            {
+                if (!byKey.TryGetValue(key, out var ic)) continue; // still absent this attempt
+                var pos = originals[key];
+                try { _provider.SetPosition(ic.Index, pos); restored++; pending.Remove(key); }
+                catch (DesktopAutoArrangeException)
+                {
+                    // Auto-arrange re-engaged mid-restore (rare style reset). Try to clear it once and
+                    // retry this icon; keep going so the others still get a chance. If it still fails
+                    // the record is kept — never strand icons off-screen with no way back.
+                    TraceLog($"[expand] '{title}' auto-arrange re-engaged at '{key}' — re-disabling");
+                    if (_provider.DisableAutoArrange())
+                    {
+                        System.Threading.Thread.Sleep(150);
+                        try { _provider.SetPosition(ic.Index, pos); restored++; pending.Remove(key); continue; }
+                        catch (Exception ex) { TraceLog($"[expand] '{title}' retry FAILED '{key}' @{pos}: {ex.Message}"); }
+                    }
+                    failed++;
+                    pending.Remove(key);
+                }
+                catch (Exception ex)
+                {
+                    // Non-auto-arrange error on this icon — log it but keep going to rescue the rest.
+                    failed++;
+                    TraceLog($"[expand] '{title}' FAILED '{key}' @{pos}: {ex.Message}");
+                    pending.Remove(key);
+                }
+            }
+            missing = pending.Count;
         }
 
-        // Drop the record ONLY when every icon is accounted for (restored or confirmed gone) and
-        // none actually failed. Any real failure keeps the record + returns false so the tab stays
-        // collapsed and the user can retry — never strand icons off-screen with a cleared record.
+        // Drop the record ONLY when every icon was actually restored to its original position
+        // (restored == total). Any unaccounted-for icon keeps the record + returns false so the tab
+        // stays collapsed and the user can retry — never strand icons off-screen with a cleared record.
         if (!IsExpandComplete(restored, missing, failed, originals.Count))
         {
             TraceLog($"[expand] '{title}' INCOMPLETE: restored={restored} missing={missing} failed={failed} — record KEPT, retry available");
@@ -869,6 +885,18 @@ public sealed class FenceOverlayController : IDisposable
         return dict;
     }
 
+    /// <summary>An expand is only "complete" — safe to drop its collapse record — when EVERY parked
+    /// icon was actually moved back to its original position (<paramref name="restored"/> == total).
+    /// A single <paramref name="missing"/> entry (an icon the lookup couldn't match) is treated as
+    /// "not yet accounted for", NOT as "genuinely gone": <see cref="GetIcons"/> can transiently miss
+    /// icons while Explorer is mid-refresh, and counting those as gone would strand them off-screen
+    /// with the record dropped — which is exactly the "collapse→expand→collapse makes a box vanish"
+    /// bug (the stranded icons get re-parked by the next collapse, dragging the tab off-screen).
+    /// Keeping the record when anything is unaccounted for lets the user retry; the only downside is
+    /// a collapsed tab lingering for an icon that was truly deleted, which is far safer than stranding.</summary>
+    internal static bool IsExpandComplete(int restored, int missing, int failed, int total) =>
+        failed == 0 && restored == total;
+
     /// <summary>The virtual desktop rect (all monitors) in screen px, or null if the metrics are
     /// unavailable. Used to keep stray icon coordinates out of cluster bounding boxes.</summary>
     private static RectI? VirtualScreen()
@@ -882,13 +910,6 @@ public sealed class FenceOverlayController : IDisposable
         }
         catch { return null; }
     }
-
-    /// <summary>An expand is only "complete" — safe to drop its collapse record — when every icon is
-    /// accounted for (restored to its original position, or confirmed gone from the desktop) and NONE
-    /// actually failed to move. A single failure (e.g. auto-arrange re-engaged mid-restore) must keep
-    /// the record so the icons are never stranded off-screen with no way back.</summary>
-    internal static bool IsExpandComplete(int restored, int missing, int failed, int total) =>
-        failed == 0 && restored + missing == total;
 
     /// <summary>Brings back icons stranded off-screen by a prior crash whose collapse record was
     /// lost (an expand that threw before persisting). Intentionally-collapsed icons (present in
@@ -920,6 +941,23 @@ public sealed class FenceOverlayController : IDisposable
             if (slot > 0) TraceLog($"[rescue] brought back {slot} stranded icon(s) to a visible cascade");
         }
         catch (Exception ex) { TraceLog($"[rescue] skipped: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// Guarantees no fence stays in the dead "collapsed but undrawable" state: a collapsed fence must
+    /// have both its parked-icon record (<see cref="_hiddenIcons"/>) and its tab rect (<see cref="_tabBounds"/>),
+    /// or its tab can't be rendered and its icons remain stranded off-screen — the box simply vanishes.
+    /// Any fence missing either half is expanded back (which rescues the parked icons) so the desktop
+    /// can never get stuck invisible. Called every refresh; a healthy state is a no-op.
+    /// </summary>
+    private void ReconcileCollapsed()
+    {
+        foreach (var title in _host.CollapsedTitles.ToList())
+        {
+            if (_tabBounds.ContainsKey(title) && _hiddenIcons.ContainsKey(title)) continue;
+            TraceLog($"[reconcile] collapsed '{title}' missing tab/hidden record → restoring to avoid vanishing");
+            ExpandFence(title);
+        }
     }
 
     private static string SortFilePath => Path.Combine(

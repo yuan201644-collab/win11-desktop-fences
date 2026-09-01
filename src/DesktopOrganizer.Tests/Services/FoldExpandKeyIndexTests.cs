@@ -86,6 +86,11 @@ public class FoldExpandKeyIndexTests
 /// icons off-screen with no tab to bring them back — another "folded but won't open" symptom.
 /// <see cref="FenceOverlayController.IsExpandComplete"/> is what now decides whether the record is
 /// safe to drop; these lock that decision.
+///
+/// The expand is only "complete" when EVERY parked icon was actually restored (restored == total).
+/// A single unaccounted-for icon (missing, e.g. a transient GetIcons flicker) MUST keep the record:
+/// counting it as "gone" used to strand it off-screen and, after a re-collapse, drag the tab off-screen
+/// — the "collapse→expand→collapse makes a box vanish" bug.
 /// </summary>
 public class ExpandRecordKeepTests
 {
@@ -105,11 +110,20 @@ public class ExpandRecordKeepTests
     }
 
     [Fact]
-    public void IsExpandComplete_GoneIconRestoredRest_DropsRecord()
+    public void IsExpandComplete_PartialMissing_KeepsRecord()
     {
-        // One icon genuinely gone (deleted/moved) but the other two restored, none failed → the box
-        // can still expand; missing icons are not a reason to keep the user stuck collapsed.
-        Assert.True(FenceOverlayController.IsExpandComplete(restored: 2, missing: 1, failed: 0, total: 3));
+        // GetIcons transiently missed one icon (explorer refresh flicker) → 2 restored, 1 missing,
+        // none failed. The missing icon is NOT proven gone, so stranding it would be wrong: keep the
+        // record so the user can retry (this is the bug that made a re-collapsed box vanish).
+        Assert.False(FenceOverlayController.IsExpandComplete(restored: 2, missing: 1, failed: 0, total: 3));
+    }
+
+    [Fact]
+    public void IsExpandComplete_AllMissing_KeepsRecord()
+    {
+        // Nothing matched the lookup at all (e.g. lookup ran mid-shell-restart). Do NOT treat that as
+        // "everything deleted" and drop the record — the icons are almost certainly still parked.
+        Assert.False(FenceOverlayController.IsExpandComplete(restored: 0, missing: 3, failed: 0, total: 3));
     }
 
     [Fact]
