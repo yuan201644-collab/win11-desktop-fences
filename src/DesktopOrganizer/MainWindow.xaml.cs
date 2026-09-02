@@ -285,6 +285,7 @@ public partial class MainWindow : Window
         cm.Items.Add(new System.Windows.Controls.Separator());
 
         cm.Items.Add(BuildColorMenu(title));
+        cm.Items.Add(BuildInsetsMenu(title));
 
         cm.Items.Add(new System.Windows.Controls.Separator());
 
@@ -368,6 +369,75 @@ public partial class MainWindow : Window
         _overlay.ResetFenceAppearance(title);
         FlashSaved();
         RefreshBoxColorRow(title);
+    }
+
+    // --- 边距「title」submenu: one compact slider per box edge, reshaping ONLY this box live.
+    //     Mirrors the settings page's four inset sliders, but funneled through the per-box override
+    //     (SetFenceInsets) so one box never widens every other box on the desktop. 恢复默认 clears
+    //     the override back to the global default — shown only while an override actually exists.
+
+    private System.Windows.Controls.MenuItem BuildInsetsMenu(string title)
+    {
+        var sub = new System.Windows.Controls.MenuItem { Header = $"边距「{title}」" };
+        var cur = _overlay.BoxInsetsFor(title);
+        AddInsetSlider(sub, "左", cur.Left, v => _overlay.SetFenceInsets(title, _overlay.BoxInsetsFor(title) with { Left = v }));
+        AddInsetSlider(sub, "右", cur.Right, v => _overlay.SetFenceInsets(title, _overlay.BoxInsetsFor(title) with { Right = v }));
+        AddInsetSlider(sub, "上", cur.Top, v => _overlay.SetFenceInsets(title, _overlay.BoxInsetsFor(title) with { Top = v }));
+        AddInsetSlider(sub, "下", cur.Bottom, v => _overlay.SetFenceInsets(title, _overlay.BoxInsetsFor(title) with { Bottom = v }));
+
+        if (_overlay.GetFenceInsets(title) is not null)
+        {
+            sub.Items.Add(new System.Windows.Controls.Separator());
+            var reset = new System.Windows.Controls.MenuItem { Header = "恢复默认（跟随全局边距）" };
+            reset.Click += (_, _) => _overlay.ResetFenceInsets(title);
+            sub.Items.Add(reset);
+        }
+        return sub;
+    }
+
+    /// <summary>One menu row: a side label, a compact slider (range -30..80 like the settings page),
+    /// and the live value. The initial assignment is guarded so opening the menu can't write the
+    /// store with a redundant no-op change.</summary>
+    private static void AddInsetSlider(
+        System.Windows.Controls.MenuItem sub, string side, int initial, Action<int> onChanged)
+    {
+        var slider = new Slider
+        {
+            Minimum = -30, Maximum = 80,
+            Width = 110, VerticalAlignment = VerticalAlignment.Center,
+        };
+        var valueText = new TextBlock
+        {
+            Width = 30,
+            Text = initial.ToString(),
+            TextAlignment = TextAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+        };
+        var item = new System.Windows.Controls.MenuItem();
+        var header = new StackPanel { Orientation = Orientation.Horizontal };
+        header.Children.Add(new TextBlock
+        {
+            Text = side,
+            VerticalAlignment = VerticalAlignment.Center,
+            Width = 16,
+            Margin = new Thickness(0, 0, 6, 0),
+        });
+        header.Children.Add(slider);
+        header.Children.Add(valueText);
+        item.Header = header;
+
+        bool init = true;
+        slider.ValueChanged += (_, e) =>
+        {
+            var v = (int)e.NewValue;
+            valueText.Text = v.ToString();
+            if (!init) onChanged(v);
+        };
+        slider.Value = initial;
+        init = false;
+
+        sub.Items.Add(item);
     }
 
     /// <summary>

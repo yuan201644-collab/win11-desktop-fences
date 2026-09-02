@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using DesktopOrganizer.Core.Config;
 
 namespace DesktopOrganizer.Core.Layout;
 
@@ -83,11 +84,16 @@ public static class FenceClusterBuilder
     /// <param name="screen">When given, the virtual desktop rect: icons lying entirely outside it
     /// (fold-parked at -32000, or stranded at any bogus coordinate) are dropped before the box is
     /// computed, so one stray point can never stretch a box — and its title bar — off-screen.</param>
+    /// <param name="perBoxInsets">Optional per-title edge padding: when a group has an entry the box
+    /// is padded with <em>that</em> box's own insets instead of the global pads. A group with no
+    /// entry (or a null Func) keeps the caller's global values exactly as before — the per-box
+    /// override never leaks into any other box.</param>
     public static IReadOnlyList<FenceCluster> Build(
         IEnumerable<(string Group, PointI Position)> placed,
         int cellWidth, int cellHeight, int pad = 8, int headerPx = 0,
         int padLeft = int.MinValue, int padRight = int.MinValue, int padTop = int.MinValue, int padBottom = int.MinValue,
-        bool separateOverlaps = true, RectI? screen = null)
+        bool separateOverlaps = true, RectI? screen = null,
+        Func<string, FenceInsets?>? perBoxInsets = null)
     {
         // Per-side padding: int.MinValue is the sentinel meaning "use pad". Any real value — including
         // negatives (shrink that edge of the box) — is honored as-is on that edge without touching the others.
@@ -125,7 +131,12 @@ public static class FenceClusterBuilder
         {
             var pts = group.Select(p => p.Position).ToList();
             if (pts.Count == 0) continue;
-            var bounds = BoxBounds(pts, cellWidth, cellHeight, left, top, right, bottom, headerPx);
+            // Per-title edge padding: a box with its own override is padded with that, and only
+            // that — the override must never widen a neighbor that keeps the global pads.
+            var (l, t, r, b) = perBoxInsets?.Invoke(group.Key) is { } fi
+                ? (fi.Left, fi.Top, fi.Right, fi.Bottom)
+                : (left, top, right, bottom);
+            var bounds = BoxBounds(pts, cellWidth, cellHeight, l, t, r, b, headerPx);
 
             // Bounding boxes can overlap (adjacent kinds sharing an edge, or a gap row sacrificed
             // under height pressure). Keep clusters GroupBy order (软件/文件夹/... first-seen = top),

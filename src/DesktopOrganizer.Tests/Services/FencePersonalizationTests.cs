@@ -70,9 +70,23 @@ public class FencePersonalizationTests
             screenProvider: () => TestScreen,
             collapseFilePath: Path.Combine(scratch, "fence-collapse.json"),
             layoutFilePath: Path.Combine(scratch, "fence-layout.json"),
-            colorFilePath: Path.Combine(scratch, "fence-colors.json"));
+            colorFilePath: Path.Combine(scratch, "fence-colors.json"),
+            boxInsetFilePath: Path.Combine(scratch, "fence-box-insets.json"),
+            fenceInsetFilePath: Path.Combine(scratch, "fence-inset.json"),
+            desktopLayoutFilePath: Path.Combine(scratch, "layout.json"));
         return new Fixture(controller, provider, host, scratch, realDir);
     }
+
+    private static FenceOverlayController NewController(Fixture f)
+        => new(
+            f.Provider, new NullOverlayHost(),
+            screenProvider: () => TestScreen,
+            collapseFilePath: Path.Combine(f.Scratch, "fence-collapse.json"),
+            layoutFilePath: Path.Combine(f.Scratch, "fence-layout.json"),
+            colorFilePath: Path.Combine(f.Scratch, "fence-colors.json"),
+            boxInsetFilePath: Path.Combine(f.Scratch, "fence-box-insets.json"),
+            fenceInsetFilePath: Path.Combine(f.Scratch, "fence-inset.json"),
+            desktopLayoutFilePath: Path.Combine(f.Scratch, "layout.json"));
 
     private static string BoxOf(DesktopIcon ic)
         => BoxGrouping.FromEntry(new SoftwareGroupingConfig(), ic.Name, ic.Path, null).Title;
@@ -108,12 +122,7 @@ public class FencePersonalizationTests
         f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
 
         // A fresh controller reading the same scratch files must see the pin.
-        var controller2 = new FenceOverlayController(
-            f.Provider, new NullOverlayHost(),
-            screenProvider: () => TestScreen,
-            collapseFilePath: Path.Combine(f.Scratch, "fence-collapse.json"),
-            layoutFilePath: Path.Combine(f.Scratch, "fence-layout.json"),
-            colorFilePath: Path.Combine(f.Scratch, "fence-colors.json"));
+        var controller2 = NewController(f);
 
         var loaded = controller2.GetFenceLayout(BoxA);
         Assert.NotNull(loaded);
@@ -177,5 +186,75 @@ public class FencePersonalizationTests
 
         Assert.Null(f.Controller.GetFenceAppearance(BoxA));
         Assert.False(f.Host.FenceColors.ContainsKey(BoxA));
+    }
+
+    // --- per-box edge padding (框边距): right-click 边距 menu, one box's override ---
+
+    private static FenceCluster ClusterOf(NullOverlayHost host, string title)
+        => Assert.Single(host.LastClusters, c => c.Title == title);
+
+    private static int MinX(FakeDesktopIconProvider provider, string title)
+        => provider.GetIcons().Where(ic => BoxOf(ic) == title).Min(ic => ic.Position.X);
+
+    [Fact]
+    public void SetFenceInsets_ReshapesOnlyThatBoxesCluster()
+    {
+        var f = Build();
+        // A known global default makes the assertion exact; the scratch path keeps the user's real
+        // fence-inset.json untouched.
+        f.Controller.BoxInsets = new FenceInsets(Left: 18, Right: 8, Top: 4, Bottom: 8);
+        f.Controller.ArrangeAndShow();
+        var before = ClusterOf(f.Host, BoxB).Bounds; // untouched box's geometry, for later
+
+        f.Controller.SetFenceInsets(BoxA, new FenceInsets(Left: 80, Right: 8, Top: 4, Bottom: 8));
+
+        var boxA = ClusterOf(f.Host, BoxA).Bounds;
+        var boxB = ClusterOf(f.Host, BoxB).Bounds;
+        // The override widened BoxA's left edge to minX-80 (global default would be minX-18)…
+        Assert.Equal(MinX(f.Provider, BoxA) - 80, boxA.Left);
+        // …and left the neighbor box exactly as it was.
+        Assert.Equal(before, boxB);
+    }
+
+    [Fact]
+    public void ResetFenceInsets_FallsBackToGlobalDefault()
+    {
+        var f = Build();
+        f.Controller.BoxInsets = new FenceInsets(Left: 18, Right: 8, Top: 4, Bottom: 8);
+        f.Controller.ArrangeAndShow();
+
+        f.Controller.SetFenceInsets(BoxA, new FenceInsets(Left: 80, Right: 8, Top: 4, Bottom: 8));
+        Assert.Equal(MinX(f.Provider, BoxA) - 80, ClusterOf(f.Host, BoxA).Bounds.Left);
+
+        f.Controller.ResetFenceInsets(BoxA);
+
+        Assert.Null(f.Controller.GetFenceInsets(BoxA));
+        Assert.Equal(MinX(f.Provider, BoxA) - 18, ClusterOf(f.Host, BoxA).Bounds.Left);
+    }
+
+    [Fact]
+    public void SetFenceInsets_PersistsAcrossControllerInstances()
+    {
+        var f = Build();
+        var wide = new FenceInsets(Left: 80, Right: 8, Top: 4, Bottom: 8);
+        f.Controller.SetFenceInsets(BoxA, wide);
+
+        var controller2 = NewController(f);
+
+        Assert.Equal(wide, controller2.GetFenceInsets(BoxA));
+        Assert.Null(controller2.GetFenceInsets(BoxB)); // untouched box has no override
+    }
+
+    [Fact]
+    public void BoxInsetsFor_ReturnsOverrideElseGlobalDefault()
+    {
+        var f = Build();
+        f.Controller.BoxInsets = new FenceInsets(Left: 18, Right: 8, Top: 4, Bottom: 8);
+        Assert.Equal(new FenceInsets(18, 8, 4, 8), f.Controller.BoxInsetsFor(BoxA));
+
+        f.Controller.SetFenceInsets(BoxA, new FenceInsets(Left: 80, Right: 8, Top: 4, Bottom: 8));
+
+        Assert.Equal(80, f.Controller.BoxInsetsFor(BoxA).Left);
+        Assert.Equal(18, f.Controller.BoxInsetsFor(BoxB).Left); // neighbor unaffected
     }
 }

@@ -33,9 +33,14 @@ public sealed class NullOverlayHost : IOverlayHost
     /// <summary>Per-fence overrides, if the controller set any (observable by tests).</summary>
     public Dictionary<string, OverlayAppearance> FenceColors { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The clusters from the most recent <see cref="Sync"/> call, so tests can assert the
+    /// geometry the controller actually drew (per-box insets reshape these bounds).</summary>
+    public IReadOnlyList<FenceCluster> LastClusters { get; private set; } = Array.Empty<FenceCluster>();
+
     public void SetVisible(bool visible) { }
 
-    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx) { }
+    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx)
+        => LastClusters = clusters.ToList();
 
     public void SetFenceBounds(string title, RectI bounds) { }
 

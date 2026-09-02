@@ -192,8 +192,8 @@
                             <TextBlock Text="图标排序" Style="{StaticResource SubGroupTitle}" />
                             <StackPanel x:Name="SortSection" />
                             <TextBlock Text="边距" Style="{StaticResource SubGroupTitle}" Margin="0,12,0,4" />
-                            <TextBlock Text="每条边向外扩展的距离；负值向内收缩。"
-                                       Style="{StaticResource SectionHint}" />
+                            <TextBlock Text="以下为所有框的默认边距；在某个框的标题上右键 →「边距」可单独调整该框。每条边向外扩展的距离；负值向内收缩。"
+                                       Style="{StaticResource SectionHint}" TextWrapping="Wrap" />
                             <StackPanel x:Name="InsetSection" />
                         </StackPanel>
                     </Border>

@@ -1,3 +1,4 @@
+using DesktopOrganizer.Core.Config;
 using DesktopOrganizer.Core.Layout;
 using Xunit;
 
@@ -270,4 +271,39 @@ public class FenceClusterBuilderTests
 
     private static bool Overlaps(RectI x, RectI y)
         => x.Left < y.Right && x.Right > y.Left && x.Top < y.Bottom && x.Bottom > y.Top;
+
+    [Fact]
+    public void PerBoxInsets_OverrideOnlyThatBox_OthersKeepGlobalPads()
+    {
+        // Box 办公 at (0,0), box 开发 at (500,0); global pad=2, but 办公 overrides its own
+        // left/top/right/bottom. The override must shape 办公's box only — 开发 keeps global 2.
+        var clusters = FenceClusterBuilder.Build(
+            new[]
+            {
+                ("办公", new PointI(0, 0)),
+                ("开发", new PointI(500, 0)),
+            }, 96, 96, pad: 2,
+            perBoxInsets: title => title == "办公" ? new FenceInsets(40, 20, 10, 30) : null);
+
+        var office = Assert.Single(clusters, c => c.Title == "办公");
+        var dev = Assert.Single(clusters, c => c.Title == "开发");
+
+        // 办公: left = 0-40 = -40; top = 0-10 = -10; width = (0+96+20)-(-40) = 156;
+        //       height = (0+96+30)-(-10) = 136.
+        Assert.Equal(new RectI(-40, -10, 156, 136), office.Bounds);
+        // 开发 unchanged: left = 500-2; top = -2; width = 96+4 = 100; height = 100.
+        Assert.Equal(new RectI(498, -2, 100, 100), dev.Bounds);
+    }
+
+    [Fact]
+    public void PerBoxInsets_BoxWithNoOverride_StillHonorsGlobalPerSidePads()
+    {
+        // Only 开发 has no override; 办公 overrides. 开发 must keep the global per-side pads
+        // (padLeft=20 …), proving a null lookup falls through to the caller's global values.
+        var cl = Assert.Single(FenceClusterBuilder.Build(
+            new[] { ("开发", new PointI(200, 300)) }, 96, 96, pad: 2,
+            padLeft: 20, padRight: 10, padTop: 4, padBottom: 8,
+            perBoxInsets: _ => null));
+        Assert.Equal(new RectI(180, 296, 126, 108), cl.Bounds);
+    }
 }

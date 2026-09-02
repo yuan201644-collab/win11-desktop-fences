@@ -40,6 +40,9 @@ public sealed class FenceOverlayController : IDisposable
     private readonly string? _collapseFilePath;
     private readonly string? _layoutFilePath;
     private readonly string? _colorFilePath;
+    private readonly string? _boxInsetFilePath;
+    private readonly string? _fenceInsetFilePath;
+    private readonly string? _desktopLayoutFilePath;
     private DispatcherTimer? _timer;
     private FenceCategoryConfig _categories;
     private bool _arranged;
@@ -57,6 +60,7 @@ public sealed class FenceOverlayController : IDisposable
     // auto-packing); an absent entry means "auto pack". See FenceLayoutStore / FenceColorStore.
     private readonly Dictionary<string, FenceLayout> _fenceLayouts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, OverlayAppearance> _fenceColors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FenceInsets> _fenceInsets = new(StringComparer.OrdinalIgnoreCase);
     private DateTime _lastResizeRelayout = DateTime.MinValue;
 
     // Drag state. _membership maps each box title → the ListView item indexes in it (rebuilt each
@@ -123,13 +127,19 @@ public sealed class FenceOverlayController : IDisposable
         Func<RectI?>? screenProvider = null,
         string? collapseFilePath = null,
         string? layoutFilePath = null,
-        string? colorFilePath = null)
+        string? colorFilePath = null,
+        string? boxInsetFilePath = null,
+        string? fenceInsetFilePath = null,
+        string? desktopLayoutFilePath = null)
     {
         _titleResolver = titleResolver;
         _screenProvider = screenProvider;
         _collapseFilePath = collapseFilePath;
         _layoutFilePath = layoutFilePath;
         _colorFilePath = colorFilePath;
+        _boxInsetFilePath = boxInsetFilePath;
+        _fenceInsetFilePath = fenceInsetFilePath;
+        _desktopLayoutFilePath = desktopLayoutFilePath;
         _provider = provider;
         _host = host;
 
@@ -144,6 +154,8 @@ public sealed class FenceOverlayController : IDisposable
             _fenceLayouts[kv.Key] = kv.Value;
         foreach (var kv in FenceColorStore.Load(FenceColorFilePath))
             _fenceColors[kv.Key] = kv.Value;
+        foreach (var kv in FenceBoxInsetStore.Load(FenceBoxInsetFilePath))
+            _fenceInsets[kv.Key] = kv.Value;
 
         _host.DragStarted += OnDragStarted;
         _host.DragMoved += OnDragMoved;
@@ -220,8 +232,9 @@ public sealed class FenceOverlayController : IDisposable
     }
 
     /// <summary>
-    /// Per-edge box padding. Setting it repersists and redraws every box live so the settings UI can
-    /// preview box width as the user slides one of the inset sliders.
+    /// Default per-edge box padding, applied to every box WITHOUT a per-box override
+    /// (<see cref="SetFenceInsets"/>). Setting it repersists and redraws every box live so the
+    /// settings UI can preview box width as the user slides one of the inset sliders.
     /// </summary>
     public FenceInsets BoxInsets
     {
@@ -474,12 +487,14 @@ public sealed class FenceOverlayController : IDisposable
                     + string.Join(", ", dropped.Take(6).Select(p => $"{p.Group}@{p.Position.X},{p.Position.Y}")));
         }
 
+        // Per-title edge padding: a box with its own override (right-click 边距 menu) is padded with
+        // that, every other box keeps the global default. separateOverlaps stays off so boxes never
+        // get pushed away from their own icons.
         var clusters = FenceClusterBuilder.Build(
             placed, _provider.IconSpacingX, _provider.IconSpacingY,
             pad: 2, headerPx: FenceHeader.HeaderPx,
-            padLeft: _insets.Left, padRight: _insets.Right,
-            padTop: _insets.Top, padBottom: _insets.Bottom,
-            separateOverlaps: false, screen: screen).ToList(); // boxes must stay on their icons, never pushed away from them
+            separateOverlaps: false, screen: screen,
+            perBoxInsets: BoxInsetsFor).ToList();
 
         // Last-resort guard: a box larger than the whole virtual desktop can only come from a
         // coordinate we failed to classify. Cap it and record the anomaly instead of letting the
@@ -696,6 +711,39 @@ public sealed class FenceOverlayController : IDisposable
         SaveFenceColors();
     }
 
+    /// <summary>The per-box edge-padding override for <paramref name="title"/>, or null when the box
+    /// uses the global default (<see cref="BoxInsets"/>).</summary>
+    public FenceInsets? GetFenceInsets(string title)
+        => _fenceInsets.TryGetValue(title, out var i) ? i : null;
+
+    /// <summary>The edge padding actually applied to <paramref name="title"/>: its per-box override
+    /// when one exists, otherwise the global default. This is the value the right-click 边距 menu and
+    /// the layout engine must both use, so an override never silently stops shaping the box.</summary>
+    public FenceInsets BoxInsetsFor(string title)
+        => _fenceInsets.TryGetValue(title, out var i) ? i : _insets;
+
+    /// <summary>Overrides one box's edge padding (right-click 边距 menu): persists and reshapes that
+    /// box's auto-derived geometry live. Other boxes keep their own insets / the global default.</summary>
+    public void SetFenceInsets(string title, FenceInsets insets)
+    {
+        _fenceInsets[title] = insets ?? FenceInsets.Default;
+        SaveFenceInsets();
+        ForceRefresh();
+    }
+
+    /// <summary>Clears a box's padding override back to the global default (<see cref="BoxInsets"/>).</summary>
+    public void ResetFenceInsets(string title)
+    {
+        if (_fenceInsets.Remove(title)) SaveFenceInsets();
+        ForceRefresh();
+    }
+
+    /// <summary>Persists the per-box edge-padding overrides. Best-effort.</summary>
+    private void SaveFenceInsets()
+    {
+        try { FenceBoxInsetStore.Save(FenceBoxInsetFilePath, _fenceInsets); } catch (Exception) { }
+    }
+
     /// <summary>Live resize drag: the candidate rect comes in every mouse-move. Apply the window
     /// geometry instantly (so the box tracks the cursor) and re-lay-out icons throttled to ~12 fps.</summary>
     private void OnResizeMoved(string title, RectI bounds)
@@ -874,7 +922,7 @@ public sealed class FenceOverlayController : IDisposable
             i++;
         }
         _hiddenIcons[title] = originals;
-        _tabBounds[title] = TabBounds(icons, sx, sy);
+        _tabBounds[title] = TabBounds(title, icons, sx, sy);
         TraceLog($"[collapse] '{title}': parked {originals.Count} icon(s) off-screen");
         return true;
     }
@@ -885,8 +933,10 @@ public sealed class FenceOverlayController : IDisposable
     /// expanded box uses. An earlier ad-hoc formula here ignored the per-side padding and the header
     /// lift, so folding kicked the title right by padLeft and down by padTop+HeaderPx (and narrowed
     /// it), and expanding snapped it back: "折叠时标题框会移动，展开之后又会回去".
+    /// The padding comes from <see cref="BoxInsetsFor"/> so a per-box 边距 override keeps the tab
+    /// exactly where the box's title bar would be when expanded.
     /// </remarks>
-    private RectI TabBounds(IReadOnlyList<DesktopIcon> icons, int cellW, int cellH)
+    private RectI TabBounds(string title, IReadOnlyList<DesktopIcon> icons, int cellW, int cellH)
     {
         var pts = icons.Select(ic => ic.Position).ToList();
         // Only on-screen positions may shape the tab. A single icon left at a bogus coordinate
@@ -898,9 +948,10 @@ public sealed class FenceOverlayController : IDisposable
             : pts.Where(p => p.X > FenceClusterBuilder.ParkedThreshold
                              && p.Y > FenceClusterBuilder.ParkedThreshold).ToList();
         if (safe.Count == 0) safe = pts; // nothing on screen to anchor to — keep every point rather than lose the tab
+        var i = BoxInsetsFor(title);
         var tab = FenceClusterBuilder.CollapsedTabBounds(
             safe, cellW, cellH,
-            _insets.Left, _insets.Top, _insets.Right, _insets.Bottom, FenceHeader.HeaderPx);
+            i.Left, i.Top, i.Right, i.Bottom, FenceHeader.HeaderPx);
         return ReachableTab(tab, screen);
     }
 
@@ -1120,11 +1171,15 @@ public sealed class FenceOverlayController : IDisposable
     }
 
     // %LOCALAPPDATA%\DesktopOrganizer\layout.json — small, and survives when the UI can't.
-    private static string LayoutFilePath => Path.Combine(
+    private string LayoutFilePath => _desktopLayoutFilePath ?? DefaultLayoutFilePath;
+
+    private static string DefaultLayoutFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "layout.json");
 
-    private static string FenceInsetFilePath => Path.Combine(
+    private string FenceInsetFilePath => _fenceInsetFilePath ?? DefaultFenceInsetFilePath;
+
+    private static string DefaultFenceInsetFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-inset.json");
 
@@ -1323,6 +1378,12 @@ public sealed class FenceOverlayController : IDisposable
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-colors.json");
 
+    private string FenceBoxInsetFilePath => _boxInsetFilePath ?? DefaultFenceBoxInsetFilePath;
+
+    private static string DefaultFenceBoxInsetFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "fence-box-insets.json");
+
     private static string CategoryFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-category.json");
@@ -1439,8 +1500,9 @@ public sealed class FenceOverlayController : IDisposable
             var icons = _provider.GetIcons().Where(ic => GroupTitle(ic) == title)
                 .Select(ic => ic.Position).ToList();
             if (icons.Count == 0) return;
+            var i = BoxInsetsFor(title);
             var b = FenceClusterBuilder.BoxBounds(icons, _provider.IconSpacingX, _provider.IconSpacingY,
-                _insets.Left, _insets.Top, _insets.Right, _insets.Bottom, FenceHeader.HeaderPx);
+                i.Left, i.Top, i.Right, i.Bottom, FenceHeader.HeaderPx);
             var clamped = ClampFenceRect(b);
             _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
             SaveFenceLayouts();
