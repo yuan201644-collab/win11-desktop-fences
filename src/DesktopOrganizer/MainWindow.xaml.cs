@@ -238,9 +238,11 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Right-click on a fence header (incl. a collapsed "隐藏图标栏" tab) — build a context menu of
-    /// extra per-fence actions at the cursor. Same actions the tray exposes, plus a one-box
-    /// 展开/折叠 and the all-at-once 全部展开 / 全部折叠, so the desktop itself is fully operable
-    /// without opening the settings window.
+    /// extra per-fence actions at the cursor. The menu stays focused on what a header click is for:
+    /// the one toggle for THIS box, the global collapse actions only while they would actually do
+    /// something (全部展开 only while some box is collapsed, 全部折叠 only while some box is expanded),
+    /// and 打开设置. 整理/恢复/退出 live in the tray menu instead, so no action is duplicated across
+    /// the two entry points.
     /// </summary>
     private void OnFenceContextMenu(string title, int x, int y)
     {
@@ -259,27 +261,24 @@ public partial class MainWindow : Window
 
         cm.Items.Add(new System.Windows.Controls.Separator());
 
-        var expandAll = new System.Windows.Controls.MenuItem { Header = "全部展开" };
-        expandAll.Click += (_, _) => _overlay.ExpandAll();
-        cm.Items.Add(expandAll);
-
-        var collapseAll = new System.Windows.Controls.MenuItem { Header = "全部折叠" };
-        collapseAll.Click += (_, _) => _overlay.CollapseAll();
-        cm.Items.Add(collapseAll);
-
-        var arrange = new System.Windows.Controls.MenuItem { Header = "重新整理全部" };
-        arrange.Click += (_, _) => { _hasArranged = true; _overlay.ArrangeAndShow(); };
-        cm.Items.Add(arrange);
+        if (_overlay.AnyCollapsed)
+        {
+            var expandAll = new System.Windows.Controls.MenuItem { Header = "全部展开" };
+            expandAll.Click += (_, _) => _overlay.ExpandAll();
+            cm.Items.Add(expandAll);
+        }
+        if (_overlay.AnyExpanded)
+        {
+            var collapseAll = new System.Windows.Controls.MenuItem { Header = "全部折叠" };
+            collapseAll.Click += (_, _) => _overlay.CollapseAll();
+            cm.Items.Add(collapseAll);
+        }
 
         cm.Items.Add(new System.Windows.Controls.Separator());
 
         var settings = new System.Windows.Controls.MenuItem { Header = "打开设置" };
         settings.Click += (_, _) => ShowFromTray();
         cm.Items.Add(settings);
-
-        var exit = new System.Windows.Controls.MenuItem { Header = "退出" };
-        exit.Click += (_, _) => ExitApp();
-        cm.Items.Add(exit);
 
         cm.IsOpen = true;
     }

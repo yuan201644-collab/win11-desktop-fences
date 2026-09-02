@@ -608,6 +608,20 @@ public sealed class FenceOverlayController : IDisposable
     /// <summary>True when <paramref name="title"/> is currently drawn as a collapsed tab.</summary>
     public bool IsCollapsed(string title) => _host.IsCollapsed(title);
 
+    /// <summary>True when at least one box is currently collapsed. The header context menu only
+    /// offers 全部展开 while this is true — offering it on a fully-expanded desktop is a no-op.</summary>
+    public bool AnyCollapsed => _host.CollapsedTitles.Count > 0;
+
+    /// <summary>True when at least one box is currently expanded. The header context menu only
+    /// offers 全部折叠 while this is true — offering it on an all-folded desktop is a no-op.
+    /// Only boxes that actually hold icons count: a config title with no icons is never rendered,
+    /// so it must not make the action look available.</summary>
+    public bool AnyExpanded => BoxOrder.Any(t => !_host.IsCollapsed(t) && HasIcons(t));
+
+    /// <summary>True when at least one icon currently belongs to <paramref name="title"/> — i.e. the
+    /// box would actually be drawn on the desktop. Empty config titles never get a fence window.</summary>
+    private bool HasIcons(string title) => _provider.GetIcons().Any(ic => GroupTitle(ic) == title);
+
     /// <summary>Expands every collapsed fence at once (right-click menu: 全部展开).</summary>
     public void ExpandAll()
     {

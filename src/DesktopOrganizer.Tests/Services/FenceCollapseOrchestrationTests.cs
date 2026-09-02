@@ -127,6 +127,27 @@ public class FenceCollapseOrchestrationTests
     }
 
     [Fact]
+    public void MenuState_AnyCollapsed_AnyExpanded_TrackTheFenceSet()
+    {
+        // Drives the dynamic 全部展开 / 全部折叠 items in the header context menu: each global
+        // action must only be offered while it would actually do something. This fixture has a
+        // single box, so the two flags are strict opposites here.
+        var (controller, _, _) = Build(iconCount: 20);
+
+        // Fresh controller: nothing collapsed → only 全部折叠 would act, 全部展开 would be a no-op.
+        Assert.False(controller.AnyCollapsed);
+        Assert.True(controller.AnyExpanded);
+
+        controller.ToggleFence(BoxTitle);
+        Assert.True(controller.AnyCollapsed);
+        Assert.False(controller.AnyExpanded); // the only box is now folded
+
+        controller.ToggleFence(BoxTitle);
+        Assert.False(controller.AnyCollapsed);
+        Assert.True(controller.AnyExpanded);
+    }
+
+    [Fact]
     public void Collapse_ParksEveryIconInsideBoundedPocket_RegardlessOfCount()
     {
         // 40 icons: even with the 2-D wrapping grid, the pocket must stay bounded and never produce a
