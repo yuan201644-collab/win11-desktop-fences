@@ -47,7 +47,8 @@ public sealed class DesktopLayoutService
     }
 
     public IReadOnlyList<(DesktopIcon Icon, Category Category, PointI Target)> ArrangeIntoFence(
-        RectI fence, int maxRows, FenceSortMode sort = FenceSortMode.Name)
+        RectI fence, int maxRows, FenceSortMode sort = FenceSortMode.Name,
+        IReadOnlyCollection<string>? skipTitles = null)
     {
         if (!_provider.IsAvailable) return new List<(DesktopIcon, Category, PointI)>();
         var icons = _provider.GetIcons();
@@ -69,6 +70,7 @@ public sealed class DesktopLayoutService
                 var box = BoxGrouping.FromEntry(_grouping, x.Icon.Name, x.Icon.Path, x.Link);
                 return (x.Icon, x.Category, Box: box);
             })
+            .Where(x => skipTitles is null || !skipTitles.Contains(x.Box.Title, StringComparer.OrdinalIgnoreCase))
             .OrderBy(x => x.Box.Order);
 
         var ordered = sort switch
@@ -133,6 +135,78 @@ public sealed class DesktopLayoutService
             var (icon, category, _) = sortedItems[i];
             _provider.SetPosition(icon.Index, targets[i]); // DesktopAutoArrangeException bubbles to caller
             report.Add((icon, category, targets[i]));
+        }
+        return report;
+    }
+
+    /// <summary>
+    /// Re-arranges ONLY the icons belonging to <paramref name="title"/> into the given
+    /// <paramref name="bounds"/> rectangle (a user-pinned fence box). Column count follows the box
+    /// width, rows follow the height budget, and every icon stays inside the rectangle — this is
+    /// what the resize drag, the settings layout editor, and <c>ArrangeAndShow</c> (for boxes with a
+    /// pinned layout) all use. Box membership and ordering match <see cref="ArrangeIntoFence"/> so a
+    /// box never changes which icons it owns between auto-pack and manual layouts.
+    /// </summary>
+    public IReadOnlyList<(DesktopIcon Icon, PointI Target)> ArrangeOneFence(
+        string title, RectI bounds, FenceSortMode sort = FenceSortMode.Name)
+    {
+        if (!_provider.IsAvailable) return new List<(DesktopIcon, PointI)>();
+        var icons = _provider.GetIcons();
+        var classified = ClassifyAll(icons);
+
+        var items = classified
+            .Select(c => new
+            {
+                c.Icon,
+                c.Category,
+                Link = c.Icon.Path is null ? null : DesktopShellEnumerator.LinkTargetAppFromPath(c.Icon.Path),
+            })
+            .Select(x =>
+            {
+                var box = BoxGrouping.FromEntry(_grouping, x.Icon.Name, x.Icon.Path, x.Link);
+                return (x.Icon, x.Category, Box: box);
+            })
+            .Where(x => string.Equals(x.Box.Title, title, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (items.Count == 0) return new List<(DesktopIcon, PointI)>();
+
+        var ordered = sort switch
+        {
+            FenceSortMode.Type => items.OrderBy(x => x.Category).ThenBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase),
+            FenceSortMode.Modified => items.OrderBy(x => ModifiedTimeUtc(x.Icon)).ThenBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase),
+            _ => items.OrderBy(x => x.Icon.Name, StringComparer.OrdinalIgnoreCase),
+        };
+        var sorted = ordered.ToList();
+
+        var cellW = _provider.IconSpacingX;
+        var cellH = _provider.IconSpacingY;
+        var headerPx = FenceHeader.HeaderPx;
+        const int EdgePad = 8;
+
+        // Column count is driven by the box width; widen until every icon fits the height budget.
+        var innerW = Math.Max(cellW, bounds.Width - EdgePad * 2);
+        var innerH = Math.Max(cellH, bounds.Height - headerPx - EdgePad);
+        var cols = Math.Max(1, innerW / cellW);
+        var maxRows = Math.Max(1, innerH / cellH);
+        var count = sorted.Count;
+        while (cols < 16 && (int)Math.Ceiling(count / (double)cols) > maxRows) cols++;
+
+        var targets = new List<PointI>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var x = Math.Clamp(bounds.X + EdgePad + (i % cols) * cellW,
+                bounds.Left, Math.Max(bounds.Left, bounds.Right - cellW));
+            var y = Math.Clamp(bounds.Y + headerPx + (i / cols) * cellH,
+                bounds.Top, Math.Max(bounds.Top, bounds.Bottom - cellH));
+            targets.Add(new PointI(x, y));
+        }
+
+        var report = new List<(DesktopIcon, PointI)>(count);
+        for (var i = 0; i < count; i++)
+        {
+            _provider.SetPosition(sorted[i].Icon.Index, targets[i]); // DesktopAutoArrangeException bubbles to caller
+            report.Add((sorted[i].Icon, targets[i]));
         }
         return report;
     }
