@@ -7,9 +7,11 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using DesktopOrganizer.Core.Classification;
 using DesktopOrganizer.Core.Config;
+using DesktopOrganizer.Core.Layout;
 using DesktopOrganizer.Services;
 using Application = System.Windows.Application;
 using Forms = System.Windows.Forms;
@@ -65,9 +67,11 @@ public partial class MainWindow : Window
         _savedTimer.Tick += (_, _) => SavedHint.Visibility = Visibility.Collapsed;
 
         BuildColorSection();
+        BuildPerBoxColorSection();
         BuildInsetSection();
         BuildRuleSection();
         BuildCategorySection();
+        BuildLayoutSection();
         InitStartupSection();
 
         // Closing the window (×) no longer quits — the app keeps running in the background so the
@@ -81,6 +85,10 @@ public partial class MainWindow : Window
         };
         _tray.DoubleClick += (_, _) => ShowFromTray();
         _tray.MouseClick += (_, e) => { if (e.Button == Forms.MouseButtons.Left) ShowFromTray(); };
+        // Rebuild the data-driven per-box rows when the user switches to their tabs (see handler).
+        // Wired here, after InitializeComponent, so the initial selection never fires it with
+        // partially-constructed fields.
+        SettingsTabs.SelectionChanged += Tabs_SelectionChanged;
         Closing += OnClosing;
     }
 
@@ -276,11 +284,321 @@ public partial class MainWindow : Window
 
         cm.Items.Add(new System.Windows.Controls.Separator());
 
+        cm.Items.Add(BuildColorMenu(title));
+
+        cm.Items.Add(new System.Windows.Controls.Separator());
+
         var settings = new System.Windows.Controls.MenuItem { Header = "打开设置" };
         settings.Click += (_, _) => ShowFromTray();
         cm.Items.Add(settings);
 
         cm.IsOpen = true;
+    }
+
+    // --- 换色「title」submenu: one entry per FencePalette preset, plus a system color dialog and a
+    //     reset back to the global palette. Picking a preset applies FencePalette.FromPrimary, so a
+    //     single click yields a coherent four-channel look instead of asking for four colors.
+    private System.Windows.Controls.MenuItem BuildColorMenu(string title)
+    {
+        var sub = new System.Windows.Controls.MenuItem { Header = $"换色「{title}」" };
+        foreach (var c in FencePalette.Presets)
+        {
+            var item = new System.Windows.Controls.MenuItem { Header = BuildSwatchHeader(c) };
+            var captured = c;
+            item.Click += (_, _) => ApplyFenceColor(title, captured);
+            sub.Items.Add(item);
+        }
+
+        sub.Items.Add(new System.Windows.Controls.Separator());
+
+        var custom = new System.Windows.Controls.MenuItem { Header = "自定义…" };
+        custom.Click += (_, _) => PickFenceColor(title);
+        sub.Items.Add(custom);
+
+        if (_overlay.GetFenceAppearance(title) is not null)
+        {
+            var reset = new System.Windows.Controls.MenuItem { Header = "恢复默认" };
+            reset.Click += (_, _) => ResetFenceColor(title);
+            sub.Items.Add(reset);
+        }
+        return sub;
+    }
+
+    /// <summary>A 14px color chip + hex label, used as a MenuItem header so each preset is
+    /// recognizable at a glance without reading the code.</summary>
+    private static object BuildSwatchHeader(ArgbColor c)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(new Border
+        {
+            Width = 14,
+            Height = 14,
+            CornerRadius = new CornerRadius(2),
+            Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, c.R, c.G, c.B)),
+            Margin = new Thickness(0, 0, 6, 0),
+        });
+        panel.Children.Add(new TextBlock { Text = $"#{c.R:X2}{c.G:X2}{c.B:X2}", VerticalAlignment = VerticalAlignment.Center });
+        return panel;
+    }
+
+    /// <summary>Applies a preset primary color to one box, live and persisted.</summary>
+    private void ApplyFenceColor(string title, ArgbColor primary)
+    {
+        _overlay.SetFenceAppearance(title, FencePalette.FromPrimary(primary));
+        FlashSaved();
+        RefreshBoxColorRow(title);
+    }
+
+    /// <summary>System color dialog → derived four-channel appearance for one box.</summary>
+    private void PickFenceColor(string title)
+    {
+        var current = _overlay.GetFenceAppearance(title)?.Header ?? _appearance.Header;
+        using var dlg = new Forms.ColorDialog
+        {
+            FullOpen = true,
+            Color = System.Drawing.Color.FromArgb(current.R, current.G, current.B),
+        };
+        if (dlg.ShowDialog() != Forms.DialogResult.OK) return;
+        var c = dlg.Color;
+        ApplyFenceColor(title, ArgbColor.FromArgb(0xFF, c.R, c.G, c.B));
+    }
+
+    private void ResetFenceColor(string title)
+    {
+        _overlay.ResetFenceAppearance(title);
+        FlashSaved();
+        RefreshBoxColorRow(title);
+    }
+
+    /// <summary>
+    /// Per-box color rows on the 配色 page: each row = the box's current color swatch (opens the
+    /// system color dialog), one chip per preset, and a 恢复默认 button that is only enabled while
+    /// the box actually has an override. Rows are kept in sync with the header 换色 submenu — both
+    /// funnel through <see cref="ApplyFenceColor"/>.
+    /// </summary>
+    private void BuildPerBoxColorSection()
+    {
+        PerBoxColorSection.Children.Clear();
+        foreach (var title in _overlay.AvailableBoxTitles)
+            PerBoxColorSection.Children.Add(BuildBoxColorRow(title));
+    }
+
+    private UIElement BuildBoxColorRow(string title)
+    {
+        var label = new TextBlock
+        {
+            Text = title,
+            Width = 96,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+
+        var swatch = new Button { Width = 26, Height = 26, HorizontalAlignment = HorizontalAlignment.Left };
+        swatch.Click += (_, _) => PickFenceColor(title);
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 3) };
+        row.Children.Add(label);
+        row.Children.Add(swatch);
+
+        foreach (var c in FencePalette.Presets)
+        {
+            var chip = new Button
+            {
+                Width = 18,
+                Height = 18,
+                Margin = new Thickness(3, 0, 0, 0),
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0xFF, c.R, c.G, c.B)),
+            };
+            var captured = c;
+            chip.Click += (_, _) => ApplyFenceColor(title, captured);
+            row.Children.Add(chip);
+        }
+
+        var reset = new Button { Content = "恢复默认", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        reset.Click += (_, _) => ResetFenceColor(title);
+        row.Children.Add(reset);
+
+        // After a color change the swatch and the reset button must reflect the new override state.
+        row.Tag = new Action(() =>
+        {
+            var eff = _overlay.GetFenceAppearance(title)?.Header ?? _appearance.Header;
+            swatch.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(
+                0xFF, eff.R, eff.G, eff.B));
+            reset.IsEnabled = _overlay.GetFenceAppearance(title) is not null;
+        });
+        ((Action)row.Tag)();
+        return row;
+    }
+
+    /// <summary>Re-paints the per-box color row for one title (swatch + reset state) after the
+    /// header 换色 menu changes it, so the settings page and the desktop never drift.</summary>
+    private void RefreshBoxColorRow(string title)
+    {
+        foreach (var child in PerBoxColorSection.Children)
+        {
+            if (child is not StackPanel row) continue;
+            var label = row.Children.OfType<TextBlock>().FirstOrDefault();
+            if (label is not null && label.Text == title && row.Tag is Action refresh)
+            {
+                refresh();
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Per-box size editor on the 分类布局 page: one row per box with pixel-exact width/height
+    /// inputs. A box with no pinned rectangle auto-packs with the rest on arrange; typing a size
+    /// pins it to that rectangle (anchored at its current position). 清除固定 unpins it again.
+    /// Rows are data-driven from the controller, mirroring the 配色 page's per-box rows.
+    /// </summary>
+    private void BuildLayoutSection()
+    {
+        LayoutSection.Children.Clear();
+        foreach (var title in _overlay.AvailableBoxTitles)
+            LayoutSection.Children.Add(BuildLayoutRow(title));
+    }
+
+    private UIElement BuildLayoutRow(string title)
+    {
+        var label = new TextBlock
+        {
+            Text = title,
+            Width = 96,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+
+        var wBox = MakeIntBox();
+        var hBox = MakeIntBox();
+        // 宽/高 label sits above the numeric box so the column reads as "宽 300 / 高 200".
+        var size = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        size.Children.Add(BuildLabeledInt("宽", wBox));
+        size.Children.Add(BuildLabeledInt("高", hBox));
+
+        var statePanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+        // Commit on Enter or on focus loss (not per keystroke — each commit re-lays-out real icons).
+        void Commit()
+        {
+            if (!int.TryParse(wBox.Text, out var w) || !int.TryParse(hBox.Text, out var h)
+                || w <= 0 || h <= 0)
+                return;
+            // Anchor X/Y at the box's current position: pinned rect if present, else live window.
+            RectI? anchor = null;
+            if (_overlay.GetFenceLayout(title) is { } pinned)
+                anchor = new RectI(pinned.X, pinned.Y, pinned.Width, pinned.Height);
+            else
+                anchor = _overlay.GetCurrentFenceBounds(title);
+            if (anchor is null)
+            {
+                // No window was ever drawn for this box (hidden or never arranged) — nothing to
+                // anchor to. Don't silently drop the edit: tell the user what to do first.
+                MessageBox.Show($"「{title}」框还没有显示过，无法固定位置。\n\n请先在主界面点「整理并显示分组」，再回来调整尺寸。",
+                    "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            _overlay.SetFenceLayout(title, new FenceLayout(anchor.Value.X, anchor.Value.Y, w, h));
+            FlashSaved();
+            RefreshLayoutState(title, statePanel);
+        }
+        wBox.LostFocus += (_, _) => Commit();
+        wBox.KeyDown += (_, e) => { if (e.Key == Key.Enter) Commit(); };
+        hBox.LostFocus += (_, _) => Commit();
+        hBox.KeyDown += (_, e) => { if (e.Key == Key.Enter) Commit(); };
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 3) };
+        row.Children.Add(label);
+        row.Children.Add(size);
+        row.Children.Add(statePanel);
+        RefreshLayoutState(title, statePanel);
+        SeedLayoutValues(title, wBox, hBox);
+        return row;
+    }
+
+    /// <summary>A "宽"/"高" label + numeric input pair, aligned to a common column width.</summary>
+    private static UIElement BuildLabeledInt(string unit, TextBox box)
+    {
+        var inner = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(6, 0, 0, 0) };
+        inner.Children.Add(new TextBlock { Text = unit, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 3, 0) });
+        inner.Children.Add(box);
+        return inner;
+    }
+
+    /// <summary>Prefills the row with the pinned size, or the live window size when unpinned.</summary>
+    private void SeedLayoutValues(string title, TextBox wBox, TextBox hBox)
+    {
+        var b = _overlay.GetFenceLayout(title) is { } pinned
+            ? new RectI(pinned.X, pinned.Y, pinned.Width, pinned.Height)
+            : _overlay.GetCurrentFenceBounds(title);
+        if (b is { } r)
+        {
+            wBox.Text = r.Width.ToString();
+            hBox.Text = r.Height.ToString();
+            wBox.IsEnabled = hBox.IsEnabled = true;
+        }
+        else
+        {
+            wBox.IsEnabled = hBox.IsEnabled = false;
+            wBox.ToolTip = hBox.ToolTip = "该框尚未显示（可能被隐藏或还没整理），先整理后再调整。";
+        }
+    }
+
+    /// <summary>Repaints the trailing action area of one layout row: 清除固定 while pinned, else a
+    /// hint that the box auto-packs (and, when it has a live window, that it can be dragged freely).</summary>
+    private void RefreshLayoutState(string title, StackPanel statePanel)
+    {
+        statePanel.Children.Clear();
+        if (_overlay.GetFenceLayout(title) is not null)
+        {
+            var clear = new Button { Content = "清除固定", Margin = new Thickness(8, 0, 0, 0) };
+            clear.Click += (_, _) =>
+            {
+                _overlay.ClearFenceLayout(title);
+                FlashSaved();
+                // The box went back to auto-pack; rebuild the whole page so this row re-seeds from
+                // the live window rect and shows the auto-pack hint again.
+                BuildLayoutSection();
+            };
+            statePanel.Children.Add(clear);
+        }
+        else
+        {
+            statePanel.Children.Add(new TextBlock
+            {
+                Text = "自动打包（可拖动调整）",
+                Margin = new Thickness(8, 0, 0, 0),
+                FontSize = 11,
+                Foreground = System.Windows.Media.Brushes.Gray,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        }
+    }
+
+    /// <summary>A width-constrained TextBox accepting digits only (Enter/focus-loss commit is wired
+    /// by the caller).</summary>
+    private static TextBox MakeIntBox()
+    {
+        var box = new TextBox { Width = 56, VerticalContentAlignment = VerticalAlignment.Center };
+        box.PreviewTextInput += (_, e) =>
+        {
+            foreach (var ch in e.Text)
+                if (ch is < '0' or > '9') { e.Handled = true; return; }
+        };
+        return box;
+    }
+
+    /// <summary>
+    /// Rebuilds the data-driven 分类布局 / 分类配色 rows whenever the user switches to those tabs.
+    /// The overlay is live (boxes can be dragged/resized/recolored on the desktop while the window
+    /// stays open), so rows built once at startup would go stale. A rebuild on tab entry keeps them
+    /// honest. The 配色 tab's global four rows are NOT rebuilt — they reflect _appearance, which is
+    /// only touched by that page itself — but its per-box section (below the global rows) is.
+    /// </summary>
+    private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (LayoutTab.IsSelected) BuildLayoutSection();
+        else if (ColorTab.IsSelected) BuildPerBoxColorSection();
     }
 
     private sealed class ColorChannel
@@ -700,6 +1018,9 @@ public partial class MainWindow : Window
         _overlay.Appearance = a;
         try { OverlayAppearanceStore.Save(AppearanceFilePath, a); }
         catch (IOException) { /* best-effort */ }
+        // Boxes without a per-box override follow the global palette — repaint their swatches so
+        // the 分类配色 rows show the color they would actually use now.
+        BuildPerBoxColorSection();
         FlashSaved();
     }
 

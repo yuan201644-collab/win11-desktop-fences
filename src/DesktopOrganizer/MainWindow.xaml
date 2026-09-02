@@ -158,13 +158,13 @@
                        VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed" />
         </StackPanel>
 
-        <!-- One page per settings area, switched from the top strip: 配色 / 框边距 / 分类显示 /
-             分组规则. Each page owns its own scroll region, so a long section can never push
-             another one off the bottom of a fixed-height window. -->
-        <TabControl Grid.Row="1" Style="{StaticResource PivotTabControl}" Margin="12,0,12,12">
+        <!-- One page per settings area, switched from the top strip: 配色 / 框边距 / 分类布局 /
+             分类显示 / 启动 / 分组规则. Each page owns its own scroll region, so a long section can
+             never push another one off the bottom of a fixed-height window. -->
+        <TabControl x:Name="SettingsTabs" Grid.Row="1" Style="{StaticResource PivotTabControl}" Margin="12,0,12,12">
 
             <!-- Color channels of the fence boxes; rows are built in code-behind. -->
-            <TabItem Header="配色">
+            <TabItem x:Name="ColorTab" Header="配色">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
                     <Border Style="{StaticResource SectionCard}">
                         <StackPanel>
@@ -172,6 +172,10 @@
                             <TextBlock Text="点色块选颜色，拖动滑杆调透明度。改动即时应用到桌面上的分类框并自动保存。"
                                        Style="{StaticResource SectionHint}" />
                             <StackPanel x:Name="ColorSection" />
+                            <TextBlock Text="分类配色" Style="{StaticResource SubGroupTitle}" Margin="0,16,0,4" />
+                            <TextBlock Text="单独给某个框换色（点色板按钮或自定义）；不设置的框跟随上方全局配色。"
+                                       Style="{StaticResource SectionHint}" />
+                            <StackPanel x:Name="PerBoxColorSection" />
                         </StackPanel>
                     </Border>
                 </ScrollViewer>
@@ -191,6 +195,20 @@
                             <TextBlock Text="每条边向外扩展的距离；负值向内收缩。"
                                        Style="{StaticResource SectionHint}" />
                             <StackPanel x:Name="InsetSection" />
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Per-box size editor: pixel-exact width/height for each fence, plus unpin. -->
+            <TabItem x:Name="LayoutTab" Header="分类布局">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,12,0,0">
+                    <Border Style="{StaticResource SectionCard}">
+                        <StackPanel>
+                            <TextBlock Text="分类布局" Style="{StaticResource SectionTitle}" />
+                            <TextBlock Text="给每个框指定像素尺寸。没动过的框自动打包，填了宽高即固定该框（或直接在桌面上拖动调整）；「清除固定」让它回到自动打包。"
+                                       Style="{StaticResource SectionHint}" />
+                            <StackPanel x:Name="LayoutSection" />
                         </StackPanel>
                     </Border>
                 </ScrollViewer>
