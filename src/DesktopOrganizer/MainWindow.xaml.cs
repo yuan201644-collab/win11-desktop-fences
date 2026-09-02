@@ -1126,4 +1126,32 @@ public partial class MainWindow : Window
     // "恢复上次布局" — re-apply the last saved icon positions (clusters + manual tweaks).
     private void RestoreButton_Click(object sender, RoutedEventArgs e)
         => _overlay.RestoreSavedLayout();
+
+    // "清除所有个性化设置" — wipe every per-box override (color / edge-padding / pinned layout) in
+    // one shot. Guarded by a confirmation dialog because it is destructive; the global default edge
+    // padding is intentionally not part of this (it is a base setting, cleared separately if wanted).
+    private void ClearPersonalizationButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_overlay.HasPersonalization)
+        {
+            MessageBox.Show("当前没有任何分类框的个性化设置（单独的框颜色 / 框边距 / 固定位置）。",
+                "清除个性化设置", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var result = MessageBox.Show(
+            "将清除所有分类框的个性化设置：\n" +
+            "  • 单独设置的框颜色\n" +
+            "  • 单独设置的框边距\n" +
+            "  • 手动固定的框位置\n\n" +
+            "清除后所有框将恢复为全局默认外观并自动打包。此操作不可撤销，是否继续？",
+            "清除所有个性化设置", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes) return;
+
+        _overlay.ResetAllPersonalization();
+        // Rebuild the settings rows that reflect per-box overrides so they snap back to "no override".
+        BuildPerBoxColorSection();
+        BuildLayoutSection();
+        FlashSaved();
+    }
 }

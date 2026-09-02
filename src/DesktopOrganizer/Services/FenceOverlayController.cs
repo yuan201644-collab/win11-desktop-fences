@@ -738,6 +738,34 @@ public sealed class FenceOverlayController : IDisposable
         ForceRefresh();
     }
 
+    /// <summary>True when any per-box personalization exists (color / edge-padding / pinned layout),
+    /// so the UI can enable or hint the "clear all" action.</summary>
+    public bool HasPersonalization
+        => _fenceColors.Count > 0 || _fenceInsets.Count > 0 || _fenceLayouts.Count > 0;
+
+    /// <summary>Clears every per-box personalization — color overrides, edge-padding overrides, and
+    /// pinned rectangles — in one call, so all boxes fall back to the global defaults and auto-pack.
+    /// The global default edge padding (<see cref="_insets"/>) is intentionally left untouched: that
+    /// is a base setting, not a personalization. Each affected box's appearance is also nulled on the
+    /// host so no stale color lingers after the refresh — <see cref="RefreshOverlay"/> only re-applies
+    /// bounds, never appearance, so it would otherwise leave the old color in place.</summary>
+    public void ResetAllPersonalization()
+    {
+        var touched = _fenceColors.Keys
+            .Concat(_fenceInsets.Keys)
+            .Concat(_fenceLayouts.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _fenceColors.Clear();
+        _fenceInsets.Clear();
+        _fenceLayouts.Clear();
+        foreach (var t in touched) _host.SetFenceAppearance(t, null);
+        SaveFenceColors();
+        SaveFenceInsets();
+        SaveFenceLayouts();
+        ForceRefresh();
+    }
+
     /// <summary>Persists the per-box edge-padding overrides. Best-effort.</summary>
     private void SaveFenceInsets()
     {

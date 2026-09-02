@@ -257,4 +257,43 @@ public class FencePersonalizationTests
         Assert.Equal(80, f.Controller.BoxInsetsFor(BoxA).Left);
         Assert.Equal(18, f.Controller.BoxInsetsFor(BoxB).Left); // neighbor unaffected
     }
+
+    // --- one-shot "clear all personalization" (设置页 清除所有个性化设置 按钮) ---
+
+    [Fact]
+    public void ResetAllPersonalization_ClearsAllThreeKindsAndHostAndStores()
+    {
+        var f = Build();
+        // Seed one of each kind of per-box personalization on BoxA.
+        f.Controller.SetFenceAppearance(BoxA, OverlayAppearance.Default);
+        f.Controller.SetFenceInsets(BoxA, new FenceInsets(Left: 80, Right: 8, Top: 4, Bottom: 8));
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
+        Assert.True(f.Controller.HasPersonalization);
+
+        f.Controller.ResetAllPersonalization();
+
+        // All three kinds are gone (and HasPersonalization flips).
+        Assert.False(f.Controller.HasPersonalization);
+        Assert.Null(f.Controller.GetFenceAppearance(BoxA));
+        Assert.Null(f.Controller.GetFenceInsets(BoxA));
+        Assert.Null(f.Controller.GetFenceLayout(BoxA));
+        // The host's cached color for that box is cleared too — RefreshOverlay only re-applies bounds,
+        // so a stale color would otherwise survive the refresh.
+        Assert.False(f.Host.FenceColors.ContainsKey(BoxA));
+        // Each store file is flushed as an empty map (so a later launch doesn't reload the overrides).
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(f.Scratch, "fence-colors.json")).Trim());
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(f.Scratch, "fence-box-insets.json")).Trim());
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(f.Scratch, "fence-layout.json")).Trim());
+    }
+
+    [Fact]
+    public void ResetAllPersonalization_IsNoOpWhenNothingSet()
+    {
+        var f = Build();
+        Assert.False(f.Controller.HasPersonalization);
+
+        f.Controller.ResetAllPersonalization(); // must not throw
+
+        Assert.False(f.Controller.HasPersonalization);
+    }
 }
