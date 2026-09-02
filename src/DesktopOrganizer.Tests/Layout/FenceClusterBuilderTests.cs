@@ -306,4 +306,74 @@ public class FenceClusterBuilderTests
             perBoxInsets: _ => null));
         Assert.Equal(new RectI(180, 296, 126, 108), cl.Bounds);
     }
+
+    // --- dual-monitor (主屏 + 副屏) integration: the virtual desktop is the UNION of all monitors,
+    //     so a secondary monitor at x>=1920 (or at negative x when it sits left) must keep its icons
+    //     in their own box instead of being dropped by ScreenGuard or stretched across screens. ---
+
+    [Fact]
+    public void DualMonitor_RightSecondary_GroupsStayOnTheirOwnScreen()
+    {
+        // 3840x1080: primary [0..1919] + secondary on the right [1920..3839].
+        var screen = new RectI(0, 0, 3840, 1080);
+        var clusters = FenceClusterBuilder.Build(
+            new[] {
+                ("文件夹", new PointI(80, 100)),
+                ("文件夹", new PointI(176, 100)),
+                ("文件",   new PointI(2000, 100)),
+                ("文件",   new PointI(2096, 100)),
+            }, 96, 96, pad: 2, headerPx: 34,
+            separateOverlaps: false, screen: screen).ToList();
+
+        // Two groups, each icon kept (ScreenGuard must NOT drop the secondary-monitor icons).
+        Assert.Equal(2, clusters.Count);
+        var primary = clusters.Single(c => c.Title == "文件夹");
+        var secondary = clusters.Single(c => c.Title == "文件");
+        Assert.Equal(2, primary.IconCount);
+        Assert.Equal(2, secondary.IconCount);
+        // The primary box stays on the primary screen; the secondary box stays on the secondary screen.
+        Assert.True(primary.Bounds.Right <= 1920, $"primary box crossed into the secondary: {primary.Bounds}");
+        Assert.True(secondary.Bounds.Left >= 1920, $"secondary box spilled onto the primary: {secondary.Bounds}");
+    }
+
+    [Fact]
+    public void DualMonitor_LeftSecondary_NegativeCoordsStayOnTheirOwnBox()
+    {
+        // 3840x1080 with the secondary monitor on the LEFT: virtual desktop is x ∈ [-1920, 1919].
+        var screen = new RectI(-1920, 0, 3840, 1080);
+        var clusters = FenceClusterBuilder.Build(
+            new[] {
+                ("文件夹", new PointI(-1880, 100)),
+                ("文件夹", new PointI(-1784, 100)),
+                ("文件",   new PointI(80, 100)),
+                ("文件",   new PointI(176, 100)),
+            }, 96, 96, pad: 2, headerPx: 34,
+            separateOverlaps: false, screen: screen).ToList();
+
+        Assert.Equal(2, clusters.Count);
+        var left = clusters.Single(c => c.Title == "文件夹");
+        var right = clusters.Single(c => c.Title == "文件");
+        Assert.Equal(2, left.IconCount);
+        Assert.Equal(2, right.IconCount);
+        // The left-monitor box keeps a NEGATIVE left edge (not clamped up to 0) and stays on the left.
+        Assert.True(left.Bounds.Left < 0, $"left-monitor box lost its negative origin: {left.Bounds}");
+        Assert.True(left.Bounds.Right <= 0, $"left box crossed to the primary: {left.Bounds}");
+        Assert.True(right.Bounds.Left >= 0, $"primary box spilled left: {right.Bounds}");
+    }
+
+    [Fact]
+    public void DualMonitor_IconPastVirtualScreenEdge_IsDroppedNotStretched()
+    {
+        // A coordinate outside the union of monitors (far right of the 3840-wide virtual desktop)
+        // is genuinely stray and must be dropped — the other icon still defines a correct box.
+        var screen = new RectI(0, 0, 3840, 1080);
+        var cl = Assert.Single(FenceClusterBuilder.Build(
+            new[] {
+                ("文件夹", new PointI(80, 100)),
+                ("文件夹", new PointI(176, 100)),
+                ("文件夹", new PointI(90000, 100)), // beyond the virtual desktop
+            }, 96, 96, pad: 2, headerPx: 34, separateOverlaps: false, screen: screen));
+        Assert.Equal(2, cl.IconCount);
+        Assert.True(cl.Bounds.Right <= 1920, $"stray point stretched the box: {cl.Bounds}");
+    }
 }

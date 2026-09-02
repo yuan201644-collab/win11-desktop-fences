@@ -281,4 +281,28 @@ public class FenceCollapseOrchestrationTests
         };
         Assert.False(FenceOverlayController.IsIntentionallyCollapsed(intentional, icon));
     }
+
+    [Fact]
+    public void Collapse_ThenRefresh_DoesNotRescueParkedIconsBackToDesktop()
+    {
+        // End-to-end regression guard for the "折叠白折" symptom (commit 776f1e6): a collapse parks
+        // the box's icons off-screen, then a refresh fires (ForceRefresh → RefreshOverlay →
+        // RescueStrandedIcons). The folded box's parked icons live in _hiddenIcons, so the rescue
+        // path must treat them as INTENTIONAL and leave them parked — the fold must not silently
+        // undo itself. Arranged state is required so ForceRefresh actually runs the refresh path
+        // (an unarranged controller returns early from RefreshOverlay).
+        var (controller, provider, original) = Build(iconCount: 25);
+        controller.ArrangeAndShow();
+
+        controller.ToggleFence(BoxTitle);
+        Assert.True(controller.IsCollapsed(BoxTitle));
+        AssertAllParked(provider, original);
+
+        // Simulate a refresh kicked off by some UI action (settings window opened, screen change, drag).
+        controller.ForceRefresh();
+
+        // The collapse must survive the refresh: still collapsed, icons still parked in the pocket.
+        Assert.True(controller.IsCollapsed(BoxTitle));
+        AssertAllParked(provider, original);
+    }
 }
