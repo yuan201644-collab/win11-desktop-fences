@@ -544,11 +544,22 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Repaints the trailing action area of one layout row: 清除固定 while pinned, else a
-    /// hint that the box auto-packs (and, when it has a live window, that it can be dragged freely).</summary>
+    /// <summary>Repaints the trailing action area of one layout row. Three states, mirroring
+    /// <see cref="SeedLayoutValues"/> exactly so the hint never contradicts the input boxes:
+    /// pinned → 清除固定; unpinned with a live window → auto-pack (editable); unpinned and never
+    /// drawn (hidden box / not arranged yet) → inputs disabled with an explanatory hint.</summary>
     private void RefreshLayoutState(string title, StackPanel statePanel)
     {
         statePanel.Children.Clear();
+        TextBlock Hint(string text) => new()
+        {
+            Text = text,
+            Margin = new Thickness(8, 0, 0, 0),
+            FontSize = 11,
+            Foreground = System.Windows.Media.Brushes.Gray,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
         if (_overlay.GetFenceLayout(title) is not null)
         {
             var clear = new Button { Content = "清除固定", Margin = new Thickness(8, 0, 0, 0) };
@@ -564,19 +575,15 @@ public partial class MainWindow : Window
         }
         else
         {
-            statePanel.Children.Add(new TextBlock
-            {
-                Text = "自动打包（可拖动调整）",
-                Margin = new Thickness(8, 0, 0, 0),
-                FontSize = 11,
-                Foreground = System.Windows.Media.Brushes.Gray,
-                VerticalAlignment = VerticalAlignment.Center,
-            });
+            statePanel.Children.Add(_overlay.GetCurrentFenceBounds(title) is null
+                ? Hint("尚未显示，先整理后再调整")
+                : Hint("自动打包（可拖动调整）"));
         }
     }
 
     /// <summary>A width-constrained TextBox accepting digits only (Enter/focus-loss commit is wired
-    /// by the caller).</summary>
+    /// by the caller). Filters both keystrokes (PreviewTextInput) and paste (DataObject.Pasting) —
+    /// paste goes through a different channel, so filtering only keystrokes would let junk in.</summary>
     private static TextBox MakeIntBox()
     {
         var box = new TextBox { Width = 56, VerticalContentAlignment = VerticalAlignment.Center };
@@ -585,6 +592,13 @@ public partial class MainWindow : Window
             foreach (var ch in e.Text)
                 if (ch is < '0' or > '9') { e.Handled = true; return; }
         };
+        // Paste bypasses PreviewTextInput: handle it here so "123abc" never lands in the box.
+        box.AddHandler(DataObject.PastingEvent, new DataObjectPastingEventHandler((_, e) =>
+        {
+            if (!e.DataObject.GetDataPresent(typeof(string))) return;
+            var text = (string)e.DataObject.GetData(typeof(string))!;
+            if (text.Length > 0 && !text.All(char.IsAsciiDigit)) e.CancelCommand();
+        }));
         return box;
     }
 
