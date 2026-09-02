@@ -28,13 +28,16 @@ namespace DesktopOrganizer.Services;
 /// </summary>
 public sealed class FenceOverlayController : IDisposable
 {
-    private readonly SysListView32Provider _provider;
+    private readonly IDesktopIconProvider _provider;
     private readonly ClassifierEngine _engine = new();
     private readonly ClassifierConfig _config = new();
     private SoftwareGroupingConfig _grouping = SoftwareGroupStore.Load(SoftwareGroupStore.DefaultFilePath);
     private readonly DesktopLayoutService _layout;
-    private readonly FenceHost _host;
-    private readonly DispatcherTimer _timer;
+    private readonly IOverlayHost _host;
+    private readonly Func<DesktopIcon, string>? _titleResolver;
+    private readonly Func<RectI?>? _screenProvider;
+    private readonly string? _collapseFilePath;
+    private DispatcherTimer? _timer;
     private FenceCategoryConfig _categories;
     private bool _arranged;
     private FenceSortMode _sortMode;
@@ -85,13 +88,40 @@ public sealed class FenceOverlayController : IDisposable
     private string[] BoxOrder => AvailableBoxTitles.Where(t => !_categories.IsHidden(t)).ToArray();
 
     public FenceOverlayController()
+        : this(new SysListView32Provider(), new FenceHost())
     {
+    }
+
+    /// <summary>
+    /// Injection/test constructor. Accepts a desktop-icon provider and overlay host so the
+    /// orchestration logic (collapse → expand → collapse) can be exercised headlessly. The public
+    /// parameterless constructor wires the real Win32 provider and WPF host and calls this.
+    /// </summary>
+    /// <param name="titleResolver">Optional override for box-title resolution in tests; when null the
+    /// controller classifies each icon normally (production behavior).</param>
+    /// <param name="screenProvider">Optional override for the virtual-desktop rect in tests. The
+    /// controller otherwise reads <see cref="SystemParameters"/> directly, which would make every
+    /// test depend on the machine it runs on (icons laid out past the real right edge would be
+    /// treated as stranded and rescued). Production callers leave this null.</param>
+    /// <param name="collapseFilePath">Optional scratch path for the persisted collapse records in
+    /// tests; production callers leave this null to use the real %LOCALAPPDATA% file.</param>
+    internal FenceOverlayController(
+        IDesktopIconProvider provider,
+        IOverlayHost host,
+        Func<DesktopIcon, string>? titleResolver = null,
+        Func<RectI?>? screenProvider = null,
+        string? collapseFilePath = null)
+    {
+        _titleResolver = titleResolver;
+        _screenProvider = screenProvider;
+        _collapseFilePath = collapseFilePath;
+        _provider = provider;
+        _host = host;
+
         _insets = FenceInsetStore.Load(FenceInsetFilePath);
         _sortMode = FenceSortStore.Load(SortFilePath);
         _categories = FenceCategoryStore.Load(CategoryFilePath);
-        _provider = new SysListView32Provider();
         _layout = new DesktopLayoutService(_provider, _engine, _config);
-        _host = new FenceHost();
         _host.DragStarted += OnDragStarted;
         _host.DragMoved += OnDragMoved;
         _host.DragEnded += OnDragEnded;
@@ -116,8 +146,6 @@ public sealed class FenceOverlayController : IDisposable
             }
         }
 
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _timer.Tick += (_, _) => RefreshOverlay();
 
         // If the last session left fences collapsed, their icons are parked off-screen right now —
         // bring the overlay up immediately (without re-arranging anything) so the tabs are visible
@@ -128,7 +156,7 @@ public sealed class FenceOverlayController : IDisposable
             {
                 _arranged = true;
                 RebuildGroupTitles();
-                _timer.Start();
+                StartOverlayTimer();
                 RefreshOverlay();
             }
             catch (Exception)
@@ -141,6 +169,19 @@ public sealed class FenceOverlayController : IDisposable
         // (e.g. an expand that threw before it persisted). Without this, such icons stay invisible
         // with no tab to bring them back. Icons that are intentionally collapsed are left alone.
         if (_provider.IsAvailable) RescueStrandedIcons();
+    }
+
+    /// <summary>
+    /// Lazily creates and starts the 2s refresh timer. Construction is deferred (never done in the
+    /// constructor) so the controller can be instantiated on a non-STA thread in unit tests without
+    /// <see cref="DispatcherTimer"/> throwing. Production callers (ArrangeAndShow / restore) hit this;
+    /// the headless test path never does.
+    /// </summary>
+    private void StartOverlayTimer()
+    {
+        _timer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _timer.Tick += (_, _) => RefreshOverlay();
+        _timer.Start();
     }
 
     /// <summary>
@@ -316,7 +357,7 @@ public sealed class FenceOverlayController : IDisposable
 
         _arranged = true;
         RebuildGroupTitles();
-        _timer.Start();
+        StartOverlayTimer();
         RefreshOverlay();
         SaveLayout();
     }
@@ -515,7 +556,7 @@ public sealed class FenceOverlayController : IDisposable
 
         _arranged = true;
         RebuildGroupTitles();
-        _timer.Start();
+        StartOverlayTimer();
         RefreshOverlay();
     }
 
@@ -859,6 +900,9 @@ public sealed class FenceOverlayController : IDisposable
 
     private string GroupTitle(DesktopIcon ic)
     {
+        // Tests may inject a deterministic resolver so a collapse can target a known box title
+        // without depending on the real classification pipeline.
+        if (_titleResolver is not null) return _titleResolver(ic);
         if (_groupTitle.TryGetValue(ic.Name, out var title)) return title;
         // Cache miss (e.g. an icon the rebuild skipped on a transient error): classify now so a
         // software icon still lands in a purpose box rather than dropping out of the overlay.
@@ -880,17 +924,27 @@ public sealed class FenceOverlayController : IDisposable
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-inset.json");
 
-    private static string CollapseFilePath => Path.Combine(
+    // Collapse records are real user state. Tests inject a scratch path so they neither inherit a
+    // previous session's collapsed boxes nor overwrite the user's own collapse file with test data.
+    private string CollapseFilePath => _collapseFilePath ?? DefaultCollapseFilePath;
+
+    private static string DefaultCollapseFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-collapse.json");
 
     // Diagnostic log for collapse/expand failures — the silent catches used to hide exactly why
     // icons stayed off-screen; every failure now lands here so a repro can be read back.
-    private static string CollapseLogPath => Path.Combine(
+    // When a scratch collapse path is injected (tests) the log follows it, so a test run can never
+    // pollute the real diagnostic trail the user reads while debugging an actual incident.
+    private string CollapseLogPath => _collapseFilePath is null
+        ? DefaultCollapseLogPath
+        : Path.Combine(Path.GetDirectoryName(_collapseFilePath)!, "fence-collapse.log");
+
+    private static string DefaultCollapseLogPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-collapse.log");
 
-    private static void TraceLog(string line)
+    private void TraceLog(string line)
     {
         try
         {
@@ -933,9 +987,13 @@ public sealed class FenceOverlayController : IDisposable
         failed == 0 && restored == total;
 
     /// <summary>The virtual desktop rect (all monitors) in screen px, or null if the metrics are
-    /// unavailable. Used to keep stray icon coordinates out of cluster bounding boxes.</summary>
-    private static RectI? VirtualScreen()
+    /// unavailable. Used to keep stray icon coordinates out of cluster bounding boxes.
+    /// <para>Tests inject a fixed rect via <see cref="_screenProvider"/>; otherwise the metrics come
+    /// straight from <see cref="SystemParameters"/>. Returning null is always safe — callers fall back
+    /// to the negative-park-zone check alone.</para></summary>
+    private RectI? VirtualScreen()
     {
+        if (_screenProvider is not null) return _screenProvider();
         try
         {
             int w = (int)SystemParameters.VirtualScreenWidth;
@@ -1114,7 +1172,7 @@ public sealed class FenceOverlayController : IDisposable
 
     public void Dispose()
     {
-        _timer.Stop();
+        _timer?.Stop();
         _host.Dispose();
         _provider.Dispose();
     }

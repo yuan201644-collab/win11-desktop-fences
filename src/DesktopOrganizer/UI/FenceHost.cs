@@ -15,7 +15,7 @@ namespace DesktopOrganizer.UI;
 /// The host is deliberately not a Window: it just manages the fence pool and forwards drag events
 /// (with cumulative pixel deltas) for the controller to move the real icons.
 /// </summary>
-public sealed class FenceHost
+public sealed class FenceHost : IOverlayHost
 {
     private readonly Dictionary<string, FenceWindow> _fences = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
