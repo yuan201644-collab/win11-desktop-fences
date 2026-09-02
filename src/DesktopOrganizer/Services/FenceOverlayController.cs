@@ -61,7 +61,14 @@ public sealed class FenceOverlayController : IDisposable
     private readonly Dictionary<string, FenceLayout> _fenceLayouts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, OverlayAppearance> _fenceColors = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FenceInsets> _fenceInsets = new(StringComparer.OrdinalIgnoreCase);
-    private DateTime _lastResizeRelayout = DateTime.MinValue;
+
+    // Resize state. Like a drag, a resize PARKS the box's icons for the gesture's duration: the
+    // candidate rectangle grows and shrinks under the cursor with zero icon traffic per frame, and
+    // on release the icons reappear once, re-packed into the final rect in the adjusted order.
+    // _resizeStart snapshots the pre-resize positions as a restore for hosts that cannot report
+    // live geometry on release (headless tests) — icons must never stay parked.
+    private bool _resizing;
+    private Dictionary<int, PointI> _resizeStart = new();
 
     // Drag state. _membership maps each box title → the ListView item indexes in it (rebuilt each
     // RefreshOverlay); _dragStart snapshots those positions on DragStarted so the release can
@@ -166,6 +173,7 @@ public sealed class FenceOverlayController : IDisposable
         _host.DragStarted += OnDragStarted;
         _host.DragMoved += OnDragMoved;
         _host.DragEnded += OnDragEnded;
+        _host.ResizeStarted += OnResizeStarted;
         _host.ResizeMoved += OnResizeMoved;
         _host.ResizeEnded += OnResizeEnded;
         _host.CollapseToggled += OnCollapseToggled;
@@ -424,8 +432,8 @@ public sealed class FenceOverlayController : IDisposable
             return;
         }
 
-        // Don't disturb the mesh mid-drag — the user's hand is on the icons.
-        if (_dragging) return;
+        // Don't disturb the mesh mid-gesture — the user's hand is on the icons (drag or resize).
+        if (_dragging || _resizing) return;
 
         // Safety net: a fence can only be drawn as a collapsed tab when BOTH its parked-icon record
         // and its tab rect exist. If either is missing the tab would be invisible while its icons
@@ -823,31 +831,56 @@ public sealed class FenceOverlayController : IDisposable
         try { FenceBoxInsetStore.Save(FenceBoxInsetFilePath, _fenceInsets); } catch (Exception) { }
     }
 
+    /// <summary>Edge grab starts a resize: park the box's icons for the gesture's duration (the
+    /// same trick a drag uses). The candidate rectangle then grows and shrinks under the cursor as
+    /// a pure WPF window move — zero cross-process icon writes per frame, so nothing can jank.</summary>
+    private void OnResizeStarted(string title)
+    {
+        if (!_membership.ContainsKey(title)) return;
+        _resizing = true;
+        _resizeStart = ParkClusterIcons(title);
+    }
+
     /// <summary>Live resize drag: the candidate rect comes in every mouse-move. Apply the window
-    /// geometry instantly (so the box tracks the cursor) and re-lay-out icons throttled to ~12 fps.</summary>
+    /// geometry instantly (so the box tracks the cursor) — and nothing else. The icons are parked
+    /// for the whole gesture; the single re-pack happens on release (see <see cref="OnResizeEnded"/>).</summary>
     private void OnResizeMoved(string title, RectI bounds)
     {
         if (!_arranged) return;
-        var b = ClampFenceRect(bounds);
-        _host.SetFenceBounds(title, b); // live box geometry — no icon moves yet
-        if (!_fenceLayouts.TryGetValue(title, out var existing)
-            || existing.X != b.X || existing.Y != b.Y || existing.Width != b.Width || existing.Height != b.Height)
-        {
-            var now = DateTime.UtcNow;
-            if ((now - _lastResizeRelayout).TotalMilliseconds < 80) return;
-            _lastResizeRelayout = now;
-            ApplyFenceLayout(title, b);
-        }
+        _host.SetFenceBounds(title, ClampFenceRect(bounds));
     }
 
-    /// <summary>Mouse-up after an edge drag: final, unthrottled layout so the box settles exactly
-    /// where the user left it.</summary>
+    /// <summary>Mouse-up after an edge drag: the ONE moment of the gesture that touches icons. The
+    /// parked icons are re-packed straight into the final rect in the adjusted order (a single
+    /// cross-process burst) and the rect is pinned. When the host cannot report live geometry
+    /// (headless tests), the icons are rigidly restored to their pre-resize spots instead — they
+    /// must never stay parked.</summary>
     private void OnResizeEnded(string title)
     {
-        if (_fenceLayouts.TryGetValue(title, out var fl))
-            ApplyFenceLayout(title, new RectI(fl.X, fl.Y, fl.Width, fl.Height));
-        else
+        bool parked = _resizing;
+        _resizing = false;
+        var final = _host.GetFenceBounds(title);
+
+        if (parked && final is { } b)
+        {
+            ApplyFenceLayout(title, b);
+            return;
+        }
+        if (parked)
+        {
+            // No live geometry: rigidly put every icon back where the gesture found it.
+            foreach (var (idx, start) in _resizeStart)
+                _provider.SetPosition(idx, start);
+            _resizeStart = new Dictionary<int, PointI>();
+            PinCurrentBox(title);
+            SaveLayout();
             ForceRefresh();
+            return;
+        }
+        // A resize of a box we never parked (no icons / unknown title): keep the old settle
+        // behavior — pin whatever rect the window ended at, or just refresh.
+        if (final is { } fb) ApplyFenceLayout(title, fb);
+        else ForceRefresh();
     }
 
     /// <summary>Pins a box to <paramref name="b"/> and re-lays-out its icons to fit the rectangle.</summary>
@@ -1525,43 +1558,49 @@ public sealed class FenceOverlayController : IDisposable
 
     // --- fence dragging: hide the cluster's icons, glide the box, restore on release ---
 
-    private void OnDragStarted(string title)
+    /// <summary>Snapshots <paramref name="title"/>'s icon positions and parks every one of them
+    /// off-screen (the collapse trick), so a box's frame can move or resize with ZERO cross-process
+    /// icon writes per frame. Returns the pre-park snapshot; empty when the box has no icons or the
+    /// desktop could not be read. RefreshOverlay is short-circuited while a park is live, and if
+    /// the process dies mid-gesture the next refresh's stranded-icon rescue brings the icons back.</summary>
+    private Dictionary<int, PointI> ParkClusterIcons(string title)
     {
-        if (!_membership.TryGetValue(title, out var indexes)) return;
-        _dragging = true;
-        _dragTitle = title;
-        _lastDeltaX = _lastDeltaY = 0;
+        var snapshot = new Dictionary<int, PointI>();
         try
         {
             var byIndex = _provider.GetIcons().ToDictionary(ic => ic.Index);
-            _dragStart = new Dictionary<int, PointI>();
-            foreach (var idx in indexes)
-                if (byIndex.TryGetValue(idx, out var ic)) _dragStart[idx] = ic.Position;
+            foreach (var idx in _membership.TryGetValue(title, out var indexes) ? indexes : Array.Empty<int>())
+                if (byIndex.TryGetValue(idx, out var ic)) snapshot[idx] = ic.Position;
         }
         catch (Exception)
         {
-            _dragStart = new Dictionary<int, PointI>();
+            return new Dictionary<int, PointI>();
         }
-        // The rectangle the user actually grabbed. On release the icons are translated by the drop
-        // rect's offset from it, so a box the user had resized keeps that exact size. Falls back to
-        // the icon-derived rect when the host never drew the window (headless tests).
-        _dragStartRect = _host.GetFenceBounds(title) ?? IconBoxRect(title) ?? default;
-
-        // Hide the icons for the duration of the drag: park them off-screen exactly like a collapse
-        // does. The box then glides with the cursor all by itself — a pure WPF move with ZERO
-        // cross-process writes per frame — and on release every icon reappears once, already at
-        // its final spot. There is no per-frame icon traffic left, so the old rubber-band feel
-        // (contents trailing their own frame) is structurally impossible. RefreshOverlay
-        // early-returns while _dragging, so its stranded-icon rescue can't fight the park; and if
-        // the process dies mid-drag, the next refresh's rescue brings the icons back.
         int sx = Math.Max(1, _provider.IconSpacingX);
         int sy = Math.Max(1, _provider.IconSpacingY);
         int slot = 0;
-        foreach (var idx in _dragStart.Keys)
+        foreach (var idx in snapshot.Keys)
         {
             try { _provider.SetPosition(idx, FenceClusterBuilder.ParkSlot(slot++, sx, sy)); }
-            catch (Exception ex) { TraceLog($"[drag] '{title}' hide FAILED #{idx}: {ex.Message}"); }
+            catch (Exception ex) { TraceLog($"[hide] '{title}' park FAILED #{idx}: {ex.Message}"); }
         }
+        return snapshot;
+    }
+
+    private void OnDragStarted(string title)
+    {
+        if (!_membership.ContainsKey(title)) return;
+        _dragging = true;
+        _dragTitle = title;
+        _lastDeltaX = _lastDeltaY = 0;
+
+        // The rectangle the user actually grabbed, read BEFORE the park (IconBoxRect derives it
+        // from icon positions, which are about to move off-screen). On release the icons are
+        // translated by the drop rect's offset from it, so a box the user had resized keeps that
+        // exact size. Falls back to the icon-derived rect when the host never drew the window
+        // (headless tests).
+        _dragStartRect = _host.GetFenceBounds(title) ?? IconBoxRect(title) ?? default;
+        _dragStart = ParkClusterIcons(title);
     }
 
     private void OnDragMoved(string title, int dx, int dy)

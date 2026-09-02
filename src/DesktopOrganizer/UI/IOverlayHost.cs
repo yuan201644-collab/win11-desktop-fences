@@ -27,11 +27,16 @@ public interface IOverlayHost
     /// <summary>Raised once when a drag ends so the controller can finalize and persist.</summary>
     event Action<string>? DragEnded;
 
+    /// <summary>Raised once when an edge resize grab starts, before the first move — the
+    /// controller parks the box's icons for the gesture (same trick as a drag).</summary>
+    event Action<string>? ResizeStarted;
+
     /// <summary>Raised live while the user drags a box edge, with the candidate screen-px rectangle.
-    /// The controller re-lays-out that box's icons and persists the pinned layout (throttled).</summary>
+    /// The icons are parked for the whole gesture, so the controller only applies window geometry.</summary>
     event Action<string, RectI>? ResizeMoved;
 
-    /// <summary>Raised once when an edge drag ends (mouse up) — the controller finalizes the layout.</summary>
+    /// <summary>Raised once when an edge drag ends (mouse up) — the controller re-packs the parked
+    /// icons into the final rect and pins the layout.</summary>
     event Action<string>? ResizeEnded;
 
     /// <summary>Palette used to recolor every visible fence live.</summary>

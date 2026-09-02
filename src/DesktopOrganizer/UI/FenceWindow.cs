@@ -65,6 +65,11 @@ public sealed class FenceWindow : Window
     /// opens a context menu of extra actions at the cursor. Carries the screen-pixel cursor location.</summary>
     public event Action<string, int, int>? ContextMenuRequested;
 
+    /// <summary>Raises when an edge grab starts a resize, before the first move — the controller
+    /// parks the box's icons for the gesture's duration (the same trick a drag uses), so the frame
+    /// can grow and shrink with zero cross-process icon traffic per frame.</summary>
+    public event Action<string>? ResizeStarted;
+
     /// <summary>Raises live while an edge resize is dragged, with the candidate screen-px rectangle.</summary>
     public event Action<string, RectI>? ResizeMoved;
 
@@ -271,6 +276,7 @@ public sealed class FenceWindow : Window
             _resizeStartRect = NativeMethods.GetWindowRect(hwnd, out var wr)
                 ? new RectI(wr.Left, wr.Top, wr.Right - wr.Left, wr.Bottom - wr.Top)
                 : default;
+            ResizeStarted?.Invoke(ClusterTitle);
             CaptureMouse();
             return;
         }

@@ -37,6 +37,10 @@ public sealed class FenceHost : IOverlayHost
     /// <summary>Raised once when a drag ends so the controller can finalize and persist.</summary>
     public event Action<string>? DragEnded;
 
+    /// <summary>Raised once when an edge resize grab starts, before the first move — the
+    /// controller parks the box's icons for the gesture (same trick as a drag).</summary>
+    public event Action<string>? ResizeStarted;
+
     /// <summary>Raised live while the user drags a box edge, with the candidate screen-px rectangle.</summary>
     public event Action<string, RectI>? ResizeMoved;
 
@@ -159,6 +163,7 @@ public sealed class FenceHost : IOverlayHost
         win.ClusterDragEnd += (t) => DragEnded?.Invoke(t);
         win.TitleToggleCollapse += (t) => CollapseToggled?.Invoke(t);
         win.ContextMenuRequested += (t, x, y) => ContextMenuRequested?.Invoke(t, x, y);
+        win.ResizeStarted += (t) => ResizeStarted?.Invoke(t);
         win.ResizeMoved += (t, r) => ResizeMoved?.Invoke(t, r);
         win.ResizeEnded += (t) => ResizeEnded?.Invoke(t);
         _fences.Add(title, win);

@@ -25,6 +25,7 @@ public sealed class NullOverlayHost : IOverlayHost
     public event Action<string>? DragStarted;
     public event Action<string, int, int>? DragMoved;
     public event Action<string>? DragEnded;
+    public event Action<string>? ResizeStarted;
     public event Action<string, RectI>? ResizeMoved;
     public event Action<string>? ResizeEnded;
 
@@ -53,6 +54,12 @@ public sealed class NullOverlayHost : IOverlayHost
     public void RaiseDragStarted(string title) => DragStarted?.Invoke(title);
     public void RaiseDragMoved(string title, int dx, int dy) => DragMoved?.Invoke(title, dx, dy);
     public void RaiseDragEnded(string title) => DragEnded?.Invoke(title);
+
+    /// <summary>Test-side trigger for the resize gesture (a real FenceWindow raises this from the
+    /// edge-grab mouse-down).</summary>
+    public void RaiseResizeStarted(string title) => ResizeStarted?.Invoke(title);
+    public void RaiseResizeMoved(string title, RectI bounds) => ResizeMoved?.Invoke(title, bounds);
+    public void RaiseResizeEnded(string title) => ResizeEnded?.Invoke(title);
 
     /// <summary>Set by tests to emulate a real window the user grabbed (the drag path anchors on the
     /// rendered rect so a resized box keeps its size); null by default = "never drawn".</summary>
