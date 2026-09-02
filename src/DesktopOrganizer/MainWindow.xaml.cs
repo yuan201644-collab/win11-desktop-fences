@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private bool _hasArranged;
     private bool _trayHintShown;
     private Forms.ToolStripMenuItem? _trayAutoStartItem;
+    private Forms.ToolStripMenuItem? _trayResetLayoutsItem;
     private readonly System.Windows.Threading.DispatcherTimer _savedTimer;
     // Fences are foreground overlay sheets layered ON TOP of the real icons, so a crash-opaque box
     // body would hide the icons underneath. Cap the fill's alpha so it can get very solid but never
@@ -172,6 +173,15 @@ public partial class MainWindow : Window
 
         menu.Items.Add("整理并显示分组", null, (_, _) => ArrangeFromTray());
         menu.Items.Add("恢复上次布局", null, (_, _) => _overlay.RestoreSavedLayout());
+
+        // "所有框恢复自动布局" — one-shot unpin: every box falls back to auto-packing (colors and
+        // edge-padding overrides stay). Grayed out while no box is pinned; the Opening hook keeps
+        // that fresh, since the menu is built once but the pin state changes any time.
+        _trayResetLayoutsItem = new Forms.ToolStripMenuItem("所有框恢复自动布局");
+        _trayResetLayoutsItem.Click += (_, _) => _overlay.ResetAllFenceLayouts();
+        menu.Items.Add(_trayResetLayoutsItem);
+        menu.Opening += (_, _) => _trayResetLayoutsItem.Enabled = _overlay.AnyPinnedLayouts;
+
         menu.Items.Add("刷新分组框", null, (_, _) => _overlay.RefreshOverlay());
         menu.Items.Add(new Forms.ToolStripSeparator());
 
@@ -280,6 +290,12 @@ public partial class MainWindow : Window
             var collapseAll = new System.Windows.Controls.MenuItem { Header = "全部折叠" };
             collapseAll.Click += (_, _) => _overlay.CollapseAll();
             cm.Items.Add(collapseAll);
+        }
+        if (_overlay.AnyPinnedLayouts)
+        {
+            var resetLayouts = new System.Windows.Controls.MenuItem { Header = "所有框恢复自动布局" };
+            resetLayouts.Click += (_, _) => _overlay.ResetAllFenceLayouts();
+            cm.Items.Add(resetLayouts);
         }
 
         cm.Items.Add(new System.Windows.Controls.Separator());
@@ -1151,6 +1167,28 @@ public partial class MainWindow : Window
         _overlay.ResetAllPersonalization();
         // Rebuild the settings rows that reflect per-box overrides so they snap back to "no override".
         BuildPerBoxColorSection();
+        BuildLayoutSection();
+        FlashSaved();
+    }
+
+    // "所有框恢复自动布局" — unpin every box at once so they re-pack automatically. Colors and
+    // edge-padding overrides are kept on purpose: position and appearance are managed separately.
+    private void ResetLayoutsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_overlay.AnyPinnedLayouts)
+        {
+            MessageBox.Show("当前没有任何分类框被固定位置。",
+                "恢复自动布局", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var result = MessageBox.Show(
+            "将取消所有分类框的固定位置，恢复为自动打包布局。\n" +
+            "框颜色与框边距设置不受影响。是否继续？",
+            "所有框恢复自动布局", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (result != MessageBoxResult.Yes) return;
+
+        _overlay.ResetAllFenceLayouts();
         BuildLayoutSection();
         FlashSaved();
     }

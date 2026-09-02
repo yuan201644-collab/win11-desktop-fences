@@ -336,4 +336,46 @@ public class FencePersonalizationTests
 
         Assert.False(f.Controller.HasPersonalization);
     }
+
+    // --- one-shot "all boxes back to auto layout" (托盘/标题框右键/设置页 所有框恢复自动布局) ---
+
+    [Fact]
+    public void ResetAllFenceLayouts_UnpinsAllBoxesButKeepsColorsAndInsets()
+    {
+        var f = Build();
+        // Seed a pin plus the other two personalization kinds on BoxA.
+        f.Controller.SetFenceAppearance(BoxA, OverlayAppearance.Default);
+        f.Controller.SetFenceInsets(BoxA, new FenceInsets(Left: 80, Right: 8, Top: 4, Bottom: 8));
+        f.Controller.ArrangeAndShow();
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
+        Assert.True(f.Controller.AnyPinnedLayouts);
+        Assert.Equal(new RectI(500, 300, 420, 300), ClusterOf(f.Host, BoxA).Bounds);
+
+        f.Controller.ResetAllFenceLayouts();
+
+        // The pin is gone: the box renders at its auto-packed bounds again (no longer the pinned
+        // rect) and the pinned-layout store flushes to an empty map.
+        Assert.False(f.Controller.AnyPinnedLayouts);
+        Assert.Null(f.Controller.GetFenceLayout(BoxA));
+        Assert.NotEqual(new RectI(500, 300, 420, 300), ClusterOf(f.Host, BoxA).Bounds);
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(f.Scratch, "fence-layout.json")).Trim());
+        // Color + edge-padding overrides survive — position and appearance are managed separately.
+        Assert.NotNull(f.Controller.GetFenceAppearance(BoxA));
+        Assert.NotNull(f.Controller.GetFenceInsets(BoxA));
+        // Nothing was lost in the re-pack: every icon still lives in exactly one cluster.
+        Assert.Equal(6, f.Host.LastClusters.Sum(c => c.IconCount));
+    }
+
+    [Fact]
+    public void ResetAllFenceLayouts_IsNoOpWhenNothingPinned()
+    {
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        Assert.False(f.Controller.AnyPinnedLayouts);
+
+        f.Controller.ResetAllFenceLayouts(); // must not throw or disturb the layout
+
+        Assert.False(f.Controller.AnyPinnedLayouts);
+        Assert.Equal(6, f.Host.LastClusters.Sum(c => c.IconCount));
+    }
 }

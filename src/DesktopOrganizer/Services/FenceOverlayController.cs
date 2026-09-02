@@ -795,6 +795,22 @@ public sealed class FenceOverlayController : IDisposable
         ForceRefresh();
     }
 
+    /// <summary>True when any box is pinned to a fixed rectangle (fence-layout.json has entries),
+    /// so the "all boxes back to auto layout" actions can hide themselves on a no-op desktop.</summary>
+    public bool AnyPinnedLayouts => _fenceLayouts.Count > 0;
+
+    /// <summary>One-shot "all boxes back to their original (auto-packed) positions": unpins every
+    /// box so they all re-pack automatically on the next refresh. Per-box color and edge-padding
+    /// overrides are intentionally kept — position and appearance are managed separately; the
+    /// all-inclusive wipe is <see cref="ResetAllPersonalization"/>.</summary>
+    public void ResetAllFenceLayouts()
+    {
+        if (_fenceLayouts.Count == 0) return;
+        _fenceLayouts.Clear();
+        SaveFenceLayouts();
+        ForceRefresh();
+    }
+
     /// <summary>Persists the per-box edge-padding overrides. Best-effort.</summary>
     private void SaveFenceInsets()
     {
