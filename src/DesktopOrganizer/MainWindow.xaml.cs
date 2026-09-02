@@ -43,6 +43,9 @@ public partial class MainWindow : Window
     private bool _trayHintShown;
     private Forms.ToolStripMenuItem? _trayAutoStartItem;
     private Forms.ToolStripMenuItem? _trayResetLayoutsItem;
+    // The fence context menu and the tiny activatable window anchoring it (see OnFenceContextMenu).
+    private System.Windows.Controls.ContextMenu? _fenceMenu;
+    private Window? _fenceMenuHost;
     private readonly System.Windows.Threading.DispatcherTimer _savedTimer;
     // Fences are foreground overlay sheets layered ON TOP of the real icons, so a crash-opaque box
     // body would hide the icons underneath. Cap the fill's alpha so it can get very solid but never
@@ -248,6 +251,7 @@ public partial class MainWindow : Window
     private void ExitApp()
     {
         _exiting = true;
+        CloseFenceMenu(); // don't leave the 1×1 menu anchor alive past shutdown
         _tray.Visible = false;
         _tray.Dispose();
         _overlay.Dispose();
@@ -266,7 +270,6 @@ public partial class MainWindow : Window
     {
         var cm = new System.Windows.Controls.ContextMenu();
         cm.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
-        cm.PlacementTarget = this;
 
         var collapsed = _overlay.IsCollapsed(title);
         var toggle = new System.Windows.Controls.MenuItem
@@ -309,7 +312,64 @@ public partial class MainWindow : Window
         settings.Click += (_, _) => ShowFromTray();
         cm.Items.Add(settings);
 
+        // Hand off to OpenFenceMenu: the menu needs a live, activated owner window to be able to
+        // auto-close, and this window only ever lives in the tray.
+        OpenFenceMenu(cm, x, y);
+    }
+
+    /// <summary>Opens a fence context menu on a throwaway 1×1 activatable window placed at the
+    /// cursor. A WPF ContextMenu auto-closes when its owner window loses activation — but this
+    /// app's main window is tray-only and never shown, so the menu had no activation to lose and
+    /// stayed painted on the desktop after the user clicked away. The helper window is shown and
+    /// activated first, so any click outside the menu (desktop, a fence, another app) deactivates
+    /// it and the menu closes the way a context menu is supposed to.</summary>
+    private void OpenFenceMenu(System.Windows.Controls.ContextMenu cm, int x, int y)
+    {
+        CloseFenceMenu();
+
+        var host = new Window
+        {
+            Width = 1,
+            Height = 1,
+            Left = x,
+            Top = y,
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            ShowActivated = true,
+            Topmost = true,
+            AllowsTransparency = true,
+            Background = System.Windows.Media.Brushes.Transparent,
+            Opacity = 0.01,
+        };
+        // If the popup itself (wrongly) took activation from the host, that Deactivated has already
+        // fired by the time IsOpen returns. Arm the auto-close only after the input queue drains,
+        // so only a genuine outside click closes the menu — never the menu opening itself.
+        bool armed = false;
+        host.Deactivated += (_, _) => { if (armed) cm.IsOpen = false; };
+        cm.Closed += (_, _) => CloseFenceMenu();
+        cm.PlacementTarget = host;
+
+        _fenceMenu = cm;
+        _fenceMenuHost = host;
+        host.Show();
+        host.Activate();
         cm.IsOpen = true;
+        host.Dispatcher.BeginInvoke(
+            new Action(() => armed = true),
+            System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+    }
+
+    /// <summary>Tears down the menu anchor, if one is up. Safe to call repeatedly (re-entrant from
+    /// the menu's own Closed handler) and safe to call at shutdown.</summary>
+    private void CloseFenceMenu()
+    {
+        var menu = _fenceMenu;
+        var host = _fenceMenuHost;
+        _fenceMenu = null;
+        _fenceMenuHost = null;
+        try { if (menu is not null) menu.IsOpen = false; } catch (Exception) { }
+        try { host?.Close(); } catch (Exception) { }
     }
 
     // --- 换色「title」submenu: one entry per FencePalette preset, plus a system color dialog and a
