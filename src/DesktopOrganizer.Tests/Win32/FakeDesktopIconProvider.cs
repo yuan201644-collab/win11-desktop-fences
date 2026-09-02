@@ -8,7 +8,7 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
 {
     private readonly Dictionary<int, PointI> _pos = new();
     public IntPtr Handle => IntPtr.Zero;
-    public bool IsAvailable => true;
+    public bool IsAvailable { get; set; } = true;
     public int IconSpacingX { get; set; } = 96;
     public int IconSpacingY { get; set; } = 96;
     public List<DesktopIcon> Icons { get; } = new();
@@ -25,7 +25,10 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
 
     // Test control: the fake desktop never has auto-arrange on by default, and "disabling" it is a no-op.
     public bool IsAutoArrangeOn { get; set; }
-    public bool DisableAutoArrange() => true;
+    // Lets a test simulate auto-arrange that CANNOT be turned off (the real Windows shell sometimes
+    // refuses), so the collapse/arrange guard paths that refuse rather than half-apply can be exercised.
+    public bool DisableAutoArrangeResult { get; set; } = true;
+    public bool DisableAutoArrange() => DisableAutoArrangeResult;
 
     public void Dispose() { }
 }
