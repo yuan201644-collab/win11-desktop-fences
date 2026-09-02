@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using DesktopOrganizer.Core.Config;
 using DesktopOrganizer.Services;
 using Application = System.Windows.Application;
+using Forms = System.Windows.Forms;
 using MessageBox = System.Windows.MessageBox;
 
 namespace DesktopOrganizer;
@@ -56,6 +57,26 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += (_, ev) =>
         {
             LogCrash("AppDomain.UnhandledException", ev.ExceptionObject as Exception);
+        };
+
+        // WinForms (the tray NotifyIcon + its message pump) has its own exception path: any error
+        // raised on it is routed to ThreadExceptionDialog by default. In the single-file publish
+        // that dialog's construction itself throws (PictureBox..cctor needs System.Net.Http, which
+        // the compressed bundle does not carry), so the error dialog crashes the app mid-launch and
+        // the process freezes — and the ORIGINAL exception never reaches crash.log. Route it to our
+        // own handler instead: log it, show a WPF dialog (WPF does not need System.Net.Http), and
+        // keep running. Must be set before any WinForms control exists (NotifyIcon is created later).
+        Forms.Application.SetUnhandledExceptionMode(Forms.UnhandledExceptionMode.CatchException);
+        Forms.Application.ThreadException += (_, ev) =>
+        {
+            LogCrash("WinForms.ThreadException", ev.Exception);
+            try
+            {
+                MessageBox.Show($"托盘线程发生异常（已记录到 {CrashLog}）：\n\n" +
+                                $"{ev.Exception.GetType().Name}: {ev.Exception.Message}",
+                    "DesktopOrganizer 错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            catch { /* log already captured it */ }
         };
 
         // Unobserved Task faults.
