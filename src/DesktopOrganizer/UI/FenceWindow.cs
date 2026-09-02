@@ -14,10 +14,12 @@ namespace DesktopOrganizer.UI;
 /// (never reparented into the shell — see <see cref="OnSourceInitialized"/>). Its body is an
 /// HTTRANSPARENT hit-test region, so mouse clicks pass through to the real desktop icons underneath
 /// (they still open/select normally), while the translucent box/header is drawn around them and the
-/// header strip stays grabbable to drag the whole cluster. Dragging hides the box's icons (the
-/// controller parks them on <see cref="ClusterDragStart"/>) and glides the window itself; the
-/// cumulative delta is still reported via <see cref="ClusterDrag"/> as the controller's fallback
-/// drop anchor when it cannot read live window geometry on release.
+/// header strip stays grabbable to drag the whole cluster. The box's icons are hidden the moment
+/// the header is PRESSED (the controller parks them on <see cref="ClusterDragStart"/>, before any
+/// movement), the window glides itself during the drag, and the cumulative delta is still reported
+/// via <see cref="ClusterDrag"/> as the controller's fallback drop anchor when it cannot read live
+/// window geometry on release. A bare click (press + release, no drag) also ends the gesture, which
+/// restores the parked icons in place.
 /// </summary>
 public sealed class FenceWindow : Window
 {
@@ -49,7 +51,9 @@ public sealed class FenceWindow : Window
     /// <summary>The cluster box title this fence draws (used to route drags to the right icon group).</summary>
     public string ClusterTitle { get; }
 
-    /// <summary>Raises once when a drag is committed (the dead-zone is crossed). Snapshot icon positions here.</summary>
+    /// <summary>Raises the instant the header is pressed — NOT after the dead-zone is crossed.
+    /// The controller parks the box's icons here; paying that burst of cross-process writes at
+    /// press time is what keeps the first drag frame completely free of them.</summary>
     public event Action<string>? ClusterDragStart;
 
     /// <summary>Raises on every mouse move during a drag, with cumulative pixel deltas from drag start.</summary>
@@ -299,6 +303,14 @@ public sealed class FenceWindow : Window
         _startX = _lastX = pt.X;
         _startY = _lastY = pt.Y;
         _dragCandidate = true;
+
+        // Park the icons NOW, at press time — not after the dead-zone is crossed. The park is one
+        // burst of cross-process writes; paying it inside the first mouse move (the old timing) is
+        // what read as a jolt the instant the drag started. By the time the hand moves, the frame
+        // is already free to glide with zero per-frame traffic. Capture here too, so the release
+        // is always seen (even off-window) and the icons can never be left parked by a lost mouse-up.
+        ClusterDragStart?.Invoke(ClusterTitle);
+        CaptureMouse();
     }
 
     private void OnToggleClicked(object sender, MouseButtonEventArgs e)
@@ -361,16 +373,15 @@ public sealed class FenceWindow : Window
         if (!_dragging)
         {
             // Exceed the small dead-zone before committing to a drag (so a click isn't a drag).
+            // The icons are already parked (park happens at press time, see OnMouseLeftButtonDown).
             if (Math.Abs(pt.X - _startX) > SystemParameters.MinimumHorizontalDragDistance
                 || Math.Abs(pt.Y - _startY) > SystemParameters.MinimumVerticalDragDistance)
             {
                 _dragging = true;
-                CaptureMouse();
             }
             else return;
             _lastX = pt.X;
             _lastY = pt.Y;
-            ClusterDragStart?.Invoke(ClusterTitle);
         }
 
         int dx = pt.X - _lastX;
@@ -398,10 +409,14 @@ public sealed class FenceWindow : Window
         if (_resizeEdge != ResizeEdge.None) { EndResize(); return; }
         if (!_dragging && !_dragCandidate) return;
         bool wasDragging = _dragging;
+        bool wasArmed = _dragCandidate;
         _dragging = false;
         _dragCandidate = false;
         if (IsMouseCaptured) ReleaseMouseCapture();
-        if (wasDragging) ClusterDragEnd?.Invoke(ClusterTitle);
+        // The press already parked the icons, so EVERY release must close the gesture — including
+        // a bare click that never crossed the dead-zone (its drag-end restores the parked icons
+        // in place). Skipping it here would leave the box's icons hidden on the desktop.
+        if (wasDragging || wasArmed) ClusterDragEnd?.Invoke(ClusterTitle);
     }
 
     private void EndResize()

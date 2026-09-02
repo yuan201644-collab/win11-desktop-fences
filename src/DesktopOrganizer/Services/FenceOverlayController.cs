@@ -1637,9 +1637,14 @@ public sealed class FenceOverlayController : IDisposable
         if (clamped != final) _host.SetFenceBounds(_dragTitle, clamped);
 
         // Pin what the user sees, so the next arrange keeps the box there instead of auto-packing
-        // it back into the crowd.
-        PinBox(title, clamped);
-        SaveLayout();
+        // it back into the crowd. A bare click (no movement — possible now that the park starts at
+        // press time) restores the icons untouched and must NOT newly pin an unpinned box: clicking
+        // a title is not a layout decision. An already-pinned box just re-pins the same rect.
+        if (dx != 0 || dy != 0 || _fenceLayouts.ContainsKey(title))
+        {
+            PinBox(title, clamped);
+            SaveLayout();
+        }
         // Record the post-drag positions so the 2s tick sees no change and leaves every box alone.
         _lastIcons = IconPositions(_provider.GetIcons());
     }

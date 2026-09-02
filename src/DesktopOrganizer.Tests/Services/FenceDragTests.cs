@@ -191,6 +191,27 @@ public class FenceDragTests
     }
 
     [Fact]
+    public void BareClick_RestoresIconsWithoutPinningANewLayout()
+    {
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        var before = IconsIn(f, BoxA).ToDictionary(ic => ic.Index, ic => ic.Position);
+
+        // The park now happens at press time (the fix for the start-of-drag jolt), so a bare
+        // click — press then release, dead-zone never crossed — still opens a gesture that the
+        // release MUST close, or the icons would be left hidden on the desktop.
+        f.Host.RaiseDragStarted(BoxA);
+        Assert.All(IconsIn(f, BoxA), ic => Assert.True(ic.Position.X < -30000, "not parked at press"));
+        f.Host.RaiseDragEnded(BoxA);
+
+        // Zero-delta restore: every icon is exactly where it was, and clicking a title does not
+        // turn into a layout decision (no pin is created for the previously unpinned box).
+        foreach (var ic in IconsIn(f, BoxA))
+            Assert.Equal(before[ic.Index], ic.Position);
+        Assert.Null(f.Controller.GetFenceLayout(BoxA));
+    }
+
+    [Fact]
     public void DragEnded_WithoutLiveGeometry_FallsBackToTheLastCumulativeDelta()
     {
         var f = Build();
