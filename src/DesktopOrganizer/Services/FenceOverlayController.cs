@@ -1000,6 +1000,14 @@ public sealed class FenceOverlayController : IDisposable
     /// </remarks>
     internal static string IndexKey(int index) => "i:" + index.ToString(CultureInfo.InvariantCulture);
 
+    /// <summary>True when the icon's restore point is recorded under any collapsed fence, i.e. it was
+    /// parked on purpose and must NOT be rescued back. Matches BOTH key schemes: index keys from
+    /// current records, and <see cref="StableKey"/> from records written by older builds. Checking
+    /// only one scheme silently re-brought-back every icon of every collapsed fence — the "折叠白折"
+    /// symptom (parked 31, then immediately rescued 31).</summary>
+    internal static bool IsIntentionallyCollapsed(HashSet<string> intentionalKeys, DesktopIcon ic) =>
+        intentionalKeys.Contains(IndexKey(ic.Index)) || intentionalKeys.Contains(StableKey(ic));
+
     /// <summary>Resolves a restore-point key to a live icon: index keys first (exact, unique), then
     /// <see cref="StableKey"/> (records from older builds, and icons whose index shifted after an
     /// Explorer restart). Returns null when the icon isn't visible to the shell yet.</summary>
@@ -1084,7 +1092,7 @@ public sealed class FenceOverlayController : IDisposable
             int slot = 0;
             foreach (var ic in parked)
             {
-                if (intentional.Contains(StableKey(ic))) continue; // collapsed on purpose
+                if (IsIntentionallyCollapsed(intentional, ic)) continue; // collapsed on purpose
                 int x = 80 + (slot % 12) * 90;
                 int y = 80 + (slot / 12) * 90;
                 try { _provider.SetPosition(ic.Index, new PointI(x, y)); }

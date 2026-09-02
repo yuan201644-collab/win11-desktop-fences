@@ -216,4 +216,48 @@ public class FenceCollapseOrchestrationTests
         });
         return "idx | actual | expected  (* = mismatch)\n" + string.Join("\n", rows);
     }
+
+    [Fact]
+    public void Rescue_MustSkip_IconsParkedByACollapsedFence()
+    {
+        // Regression guard for the "折叠白折" symptom: a collapse parked 31 icons, then the refresh
+        // self-heal IMMEDIATELY rescued all 31 back to the visible desktop — the fold did nothing.
+        //
+        // CollapseHide records restore points under IndexKey ("i:<index>"), but RescueStrandedIcons
+        // used to test only StableKey ("path:<path>") when deciding whether an off-screen icon was
+        // parked on purpose. The two key schemes never match, so every parked icon looked "orphaned"
+        // and was brought back. An icon owned by a collapsed fence must never be rescued.
+        var icon = new DesktopIcon(7, "图标7", @"C:\fake\icon7.lnk", new PointI(-31924, -31748));
+        var intentional = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            FenceOverlayController.IndexKey(icon.Index),
+        };
+        Assert.True(FenceOverlayController.IsIntentionallyCollapsed(intentional, icon));
+    }
+
+    [Fact]
+    public void Rescue_MustSkip_IconsRecordedByOlderBuilds_UnderStableKey()
+    {
+        // Records written before the IndexKey migration keep StableKey keys; rescuing those would
+        // strand (well, un-hide) icons that were folded with an older build and are still collapsed.
+        var icon = new DesktopIcon(3, "图标3", @"C:\fake\icon3.lnk", new PointI(-31700, -31600));
+        var intentional = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            FenceOverlayController.StableKey(icon),
+        };
+        Assert.True(FenceOverlayController.IsIntentionallyCollapsed(intentional, icon));
+    }
+
+    [Fact]
+    public void Rescue_MustBringBack_OffscreenIconsOwnedByNoCollapsedFence()
+    {
+        // The other half of the contract: an off-screen icon that matches NO collapse record is a
+        // genuine orphan (parked by a crashed build whose record was lost) and must be rescued.
+        var icon = new DesktopIcon(9, "图标9", @"C:\fake\icon9.lnk", new PointI(-31924, -31748));
+        var intentional = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            FenceOverlayController.IndexKey(99),
+        };
+        Assert.False(FenceOverlayController.IsIntentionallyCollapsed(intentional, icon));
+    }
 }
