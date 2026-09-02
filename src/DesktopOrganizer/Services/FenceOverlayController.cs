@@ -723,19 +723,48 @@ public sealed class FenceOverlayController : IDisposable
         => _fenceInsets.TryGetValue(title, out var i) ? i : _insets;
 
     /// <summary>Overrides one box's edge padding (right-click 边距 menu): persists and reshapes that
-    /// box's auto-derived geometry live. Other boxes keep their own insets / the global default.</summary>
+    /// box's auto-derived geometry live. Other boxes keep their own insets / the global default.
+    /// A pinned box renders its stored rectangle verbatim, so the delta is applied to that rectangle
+    /// too — otherwise the slider would visibly do nothing on it.</summary>
     public void SetFenceInsets(string title, FenceInsets insets)
     {
-        _fenceInsets[title] = insets ?? FenceInsets.Default;
+        var target = insets ?? FenceInsets.Default;
+        var previous = BoxInsetsFor(title);
+        _fenceInsets[title] = target;
         SaveFenceInsets();
+        ReshapePinnedRectByInsetsDelta(title, previous, target);
         ForceRefresh();
     }
 
-    /// <summary>Clears a box's padding override back to the global default (<see cref="BoxInsets"/>).</summary>
+    /// <summary>Clears a box's padding override back to the global default (<see cref="BoxInsets"/>).
+    /// On a pinned box the resulting delta also un-applies from the pinned rectangle.</summary>
     public void ResetFenceInsets(string title)
     {
-        if (_fenceInsets.Remove(title)) SaveFenceInsets();
+        if (_fenceInsets.TryGetValue(title, out var previous))
+        {
+            _fenceInsets.Remove(title);
+            SaveFenceInsets();
+            ReshapePinnedRectByInsetsDelta(title, previous, _insets);
+        }
         ForceRefresh();
+    }
+
+    /// <summary>A pinned box's rectangle is rendered exactly as stored — <see cref="RefreshOverlay"/>
+    /// replaces the auto-derived bounds with it — so an inset change alone would be invisible there.
+    /// This shifts/resizes the stored rectangle by the same delta the auto path would have produced
+    /// (left inset +10 grows the left edge 10px leftward, etc.), keeping the box's relationship to
+    /// its icon cloud identical to an unpinned box's. Icons are NOT re-gridded: inset semantics only
+    /// move the box edges, the same as on the auto-derived path.</summary>
+    private void ReshapePinnedRectByInsetsDelta(string title, FenceInsets previous, FenceInsets target)
+    {
+        if (!_fenceLayouts.TryGetValue(title, out var fl)) return;
+        var clamped = ClampFenceRect(new RectI(
+            fl.X - (target.Left - previous.Left),
+            fl.Y - (target.Top - previous.Top),
+            fl.Width + (target.Left - previous.Left) + (target.Right - previous.Right),
+            fl.Height + (target.Top - previous.Top) + (target.Bottom - previous.Bottom)));
+        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
+        SaveFenceLayouts();
     }
 
     /// <summary>True when any per-box personalization exists (color / edge-padding / pinned layout),

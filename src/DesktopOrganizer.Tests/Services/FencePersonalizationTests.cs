@@ -258,6 +258,46 @@ public class FencePersonalizationTests
         Assert.Equal(18, f.Controller.BoxInsetsFor(BoxB).Left); // neighbor unaffected
     }
 
+    // --- pinned box + 边距: the pinned rect is rendered verbatim, so the slider must reshape IT ---
+
+    [Fact]
+    public void SetFenceInsets_OnPinnedBox_ReshapesPinnedRectByDelta()
+    {
+        var f = Build();
+        f.Controller.BoxInsets = new FenceInsets(Left: 18, Right: 8, Top: 4, Bottom: 8);
+        f.Controller.ArrangeAndShow();
+        // Pin BoxA: RefreshOverlay renders this stored rectangle verbatim, ignoring the
+        // auto-derived (inset-shaped) bounds — previously that made the slider a no-op here.
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
+        Assert.Equal(new RectI(500, 300, 420, 300), ClusterOf(f.Host, BoxA).Bounds);
+
+        // Left inset 18 → 80 (delta +62), other sides unchanged.
+        f.Controller.SetFenceInsets(BoxA, new FenceInsets(Left: 80, Right: 8, Top: 4, Bottom: 8));
+
+        var b = ClusterOf(f.Host, BoxA).Bounds;
+        Assert.Equal(500 - 62, b.Left);    // left edge slides out by the delta…
+        Assert.Equal(420 + 62, b.Width);   // …and the rectangle widens by it
+        Assert.Equal(300, b.Top);          // unchanged sides stay put
+        Assert.Equal(300, b.Height);
+        // The reshape is persisted into the pinned-layout store, not just rendered once.
+        Assert.Equal(new FenceLayout(438, 300, 482, 300), f.Controller.GetFenceLayout(BoxA));
+    }
+
+    [Fact]
+    public void ResetFenceInsets_OnPinnedBox_UnappliesDeltaFromPinnedRect()
+    {
+        var f = Build();
+        f.Controller.BoxInsets = new FenceInsets(Left: 18, Right: 8, Top: 4, Bottom: 8);
+        f.Controller.ArrangeAndShow();
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
+        f.Controller.SetFenceInsets(BoxA, new FenceInsets(Left: 80, Right: 30, Top: 4, Bottom: 8));
+
+        f.Controller.ResetFenceInsets(BoxA);
+
+        // Falling back to the global default un-applies the whole override delta from the rect.
+        Assert.Equal(new RectI(500, 300, 420, 300), ClusterOf(f.Host, BoxA).Bounds);
+    }
+
     // --- one-shot "clear all personalization" (设置页 清除所有个性化设置 按钮) ---
 
     [Fact]
