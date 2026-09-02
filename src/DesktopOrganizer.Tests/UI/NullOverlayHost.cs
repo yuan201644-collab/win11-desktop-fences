@@ -42,11 +42,25 @@ public sealed class NullOverlayHost : IOverlayHost
     public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx)
         => LastClusters = clusters.ToList();
 
-    public void SetFenceBounds(string title, RectI bounds) { }
+    /// <summary>Every live single-box move the controller asked for (title → rect), newest last.
+    /// The drag path renders the box this way instead of re-syncing the whole mesh, so this is the
+    /// observable record of "the frame moved with the icons" that tests assert against.</summary>
+    public List<(string Title, RectI Bounds)> MovedBounds { get; } = new();
+
+    public void SetFenceBounds(string title, RectI bounds) => MovedBounds.Add((title, bounds));
+
+    // Test-side triggers for the drag gesture (a real FenceWindow raises these from mouse events).
+    public void RaiseDragStarted(string title) => DragStarted?.Invoke(title);
+    public void RaiseDragMoved(string title, int dx, int dy) => DragMoved?.Invoke(title, dx, dy);
+    public void RaiseDragEnded(string title) => DragEnded?.Invoke(title);
+
+    /// <summary>Set by tests to emulate a real window the user grabbed (the drag path anchors on the
+    /// rendered rect so a resized box keeps its size); null by default = "never drawn".</summary>
+    public RectI? FenceBoundsOverride { get; set; }
 
     /// <summary>Headless host has no windows — the settings editor must not rely on live geometry
     /// in tests; the pinned-layout path (which needs no window) is the one under test.</summary>
-    public RectI? GetFenceBounds(string title) => null;
+    public RectI? GetFenceBounds(string title) => FenceBoundsOverride;
 
     public void SetFenceAppearance(string title, OverlayAppearance? appearance)
     {

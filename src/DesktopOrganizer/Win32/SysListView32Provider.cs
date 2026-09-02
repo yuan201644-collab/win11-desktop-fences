@@ -10,6 +10,11 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
 {
     private readonly IntPtr _hwnd;
     private readonly bool _available;
+
+    // Auto-arrange probe cache (see AutoArrangeOn): 0 = never probed.
+    private const long StyleProbeTtlMs = 1000;
+    private bool _autoArrangeOn;
+    private long _styleProbedAt;
     private readonly IReadOnlyDictionary<string, string> _nameToPath;
     private readonly int _clientLeft;
     private readonly int _clientTop;
@@ -130,19 +135,38 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         if ((style & NativeMethods.LVS_AUTOARRANGE) == 0) return true;
         NativeMethods.SetWindowLong(_hwnd, NativeMethods.GWL_STYLE, style & ~NativeMethods.LVS_AUTOARRANGE);
         var after = NativeMethods.GetWindowLong(_hwnd, NativeMethods.GWL_STYLE);
-        return (after & NativeMethods.LVS_AUTOARRANGE) == 0;
+        var off = (after & NativeMethods.LVS_AUTOARRANGE) == 0;
+        if (off) { _autoArrangeOn = false; _styleProbedAt = Environment.TickCount64; }
+        return off;
     }
 
     public void SetPosition(int index, PointI screenPos)
     {
         if (!_available) return;
-        var style = NativeMethods.GetWindowLong(_hwnd, NativeMethods.GWL_STYLE);
-        if ((style & NativeMethods.LVS_AUTOARRANGE) != 0)
+        // The style query is a cross-process round trip into Explorer, and SetPosition is called once
+        // per icon per frame while a box is dragged (and once per icon on every arrange) — querying
+        // it inline roughly doubled the cost of a drag frame. The bit only changes when the user
+        // toggles it by hand in Explorer, so a short-lived cache is safe and keeps the hot path at
+        // exactly one cross-process call (the LVM_SETITEMPOSITION itself).
+        if (AutoArrangeOn())
             throw new DesktopAutoArrangeException(
                 "Desktop has 'Auto arrange' ON — positions are ignored. Turn it off (right-click desktop → View → uncheck Auto arrange) and retry.");
         EnsureMarshaller();
         // screen → client（listview 原点在虚拟屏左上角，多显示器时可能为负）
         _marshaller!.SetItemPosition(_hwnd, index, screenPos.X - _clientLeft, screenPos.Y - _clientTop);
+    }
+
+    /// <summary>Cached "auto arrange" probe (<see cref="SetPosition"/> explains why). Refresh after
+    /// <see cref="StyleProbeTtlMs"/> so a manual toggle in Explorer is still picked up within a
+    /// second — worst case a few writes in that window are ignored, and the next probe reports it.</summary>
+    private bool AutoArrangeOn()
+    {
+        var now = Environment.TickCount64;
+        if (_styleProbedAt != 0 && now - _styleProbedAt < StyleProbeTtlMs) return _autoArrangeOn;
+        var style = NativeMethods.GetWindowLong(_hwnd, NativeMethods.GWL_STYLE);
+        _autoArrangeOn = (style & NativeMethods.LVS_AUTOARRANGE) != 0;
+        _styleProbedAt = now;
+        return _autoArrangeOn;
     }
 
     private void EnsureMarshaller()

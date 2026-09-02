@@ -370,9 +370,10 @@ public sealed class FenceWindow : Window
         _lastX = pt.X;
         _lastY = pt.Y;
 
-        // Slide the box live with the cursor (window geometry uses DIPs).
-        Left += dx / Math.Max(0.1, GetScaleX());
-        Top += dy / Math.Max(0.1, GetScaleY());
+        // Report the cumulative delta and let the CONTROLLER move both the icons and this window in
+        // one tick. Sliding the window here instead (which is what used to happen) is what produced
+        // the rubber-band feel: the frame ran ahead instantly while the icons it holds still had to
+        // make a cross-process round trip each, so the contents visibly trailed the box.
         ClusterDrag?.Invoke(ClusterTitle, pt.X - _startX, pt.Y - _startY);
     }
 
