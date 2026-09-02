@@ -347,7 +347,10 @@ public partial class MainWindow : Window
         // so only a genuine outside click closes the menu — never the menu opening itself.
         bool armed = false;
         host.Deactivated += (_, _) => { if (armed) cm.IsOpen = false; };
-        cm.Closed += (_, _) => CloseFenceMenu();
+        // Guard on identity: a previously-open menu's Closed can fire on a later dispatcher tick
+        // (after A.IsOpen=false, before/after the next menu opens). Without this, re-opening a fence
+        // menu while one is already open would let the stale Closed tear down the NEW menu.
+        cm.Closed += (_, _) => { if (_fenceMenu == cm) CloseFenceMenu(); };
         cm.PlacementTarget = host;
 
         _fenceMenu = cm;
