@@ -38,6 +38,8 @@ public sealed class FenceOverlayController : IDisposable
     private readonly Func<DesktopIcon, string>? _titleResolver;
     private readonly Func<RectI?>? _screenProvider;
     private readonly string? _collapseFilePath;
+    private readonly string? _layoutFilePath;
+    private readonly string? _colorFilePath;
     private DispatcherTimer? _timer;
     private FenceCategoryConfig _categories;
     private bool _arranged;
@@ -48,6 +50,14 @@ public sealed class FenceOverlayController : IDisposable
     private Dictionary<int, PointI> _lastIcons = new();
     private bool _lastShown;
     private FenceInsets _insets;
+
+    // User-pinned fence geometry (title → screen-px rectangle) and per-fence color overrides,
+    // loaded at startup and persisted on every change. A pinned rectangle makes a box keep its
+    // shape across re-arranges (ArrangeAndShow lays that box's icons into it instead of
+    // auto-packing); an absent entry means "auto pack". See FenceLayoutStore / FenceColorStore.
+    private readonly Dictionary<string, FenceLayout> _fenceLayouts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, OverlayAppearance> _fenceColors = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _lastResizeRelayout = DateTime.MinValue;
 
     // Drag state. _membership maps each box title → the ListView item indexes in it (rebuilt each
     // RefreshOverlay); _dragStart snapshots those positions on DragStarted so deltas map to absolutes.
@@ -111,11 +121,15 @@ public sealed class FenceOverlayController : IDisposable
         IOverlayHost host,
         Func<DesktopIcon, string>? titleResolver = null,
         Func<RectI?>? screenProvider = null,
-        string? collapseFilePath = null)
+        string? collapseFilePath = null,
+        string? layoutFilePath = null,
+        string? colorFilePath = null)
     {
         _titleResolver = titleResolver;
         _screenProvider = screenProvider;
         _collapseFilePath = collapseFilePath;
+        _layoutFilePath = layoutFilePath;
+        _colorFilePath = colorFilePath;
         _provider = provider;
         _host = host;
 
@@ -123,9 +137,19 @@ public sealed class FenceOverlayController : IDisposable
         _sortMode = FenceSortStore.Load(SortFilePath);
         _categories = FenceCategoryStore.Load(CategoryFilePath);
         _layout = new DesktopLayoutService(_provider, _engine, _config);
+
+        // Restore pinned box geometry and per-box colors. Tests inject scratch paths so they never
+        // read the user's real fence-layout.json / fence-colors.json, nor write test data into them.
+        foreach (var kv in FenceLayoutStore.Load(FenceLayoutFilePath))
+            _fenceLayouts[kv.Key] = kv.Value;
+        foreach (var kv in FenceColorStore.Load(FenceColorFilePath))
+            _fenceColors[kv.Key] = kv.Value;
+
         _host.DragStarted += OnDragStarted;
         _host.DragMoved += OnDragMoved;
         _host.DragEnded += OnDragEnded;
+        _host.ResizeMoved += OnResizeMoved;
+        _host.ResizeEnded += OnResizeEnded;
         _host.CollapseToggled += OnCollapseToggled;
         _host.ContextMenuRequested += (t, x, y) => FenceContextMenu?.Invoke(t, x, y);
 
@@ -341,9 +365,15 @@ public sealed class FenceOverlayController : IDisposable
         var maxRows = Math.Max(1, (h - LayoutMargin * 2) / Math.Max(1, spacingY));
         try
         {
-            // Layout inside a margin so no icon sits flush against (or over) a screen edge;
-            // the overlay below still renders across the full screen.
-            _layout.ArrangeIntoFence(new RectI(x + LayoutMargin, y + LayoutMargin, w - LayoutMargin * 2, h - LayoutMargin * 2), maxRows, _sortMode);
+            // Boxes with a pinned rectangle keep their shape: the auto packer skips their icons and
+            // each pinned box lays its own icons out afterwards. Everything else auto-packs as before.
+            var pinned = _fenceLayouts.Keys.ToList();
+            _layout.ArrangeIntoFence(
+                new RectI(x + LayoutMargin, y + LayoutMargin, w - LayoutMargin * 2, h - LayoutMargin * 2),
+                maxRows, _sortMode, skipTitles: pinned);
+            foreach (var title in pinned)
+                if (_fenceLayouts.TryGetValue(title, out var fl))
+                    _layout.ArrangeOneFence(title, new RectI(fl.X, fl.Y, fl.Width, fl.Height), _sortMode);
         }
         catch (DesktopAutoArrangeException)
         {
@@ -463,12 +493,27 @@ public sealed class FenceOverlayController : IDisposable
                 clusters[i] = c with { Bounds = FenceClusterBuilder.ClampBounds(c.Bounds, sc2) };
             }
 
+        // Boxes with a pinned rectangle render at that exact rectangle (the user dragged it there),
+        // not at the auto-derived icon bounds — the box keeps its shape even when its icons don't
+        // fill it, and stays where the user put it across refreshes.
+        if (_fenceLayouts.Count > 0)
+            for (int i = 0; i < clusters.Count; i++)
+            {
+                var c = clusters[i];
+                if (_fenceLayouts.TryGetValue(c.Title, out var fl))
+                    clusters[i] = c with { Bounds = new RectI(fl.X, fl.Y, fl.Width, fl.Height) };
+            }
+
         // Collapsed boxes produce no clusters above; append one thin tab cluster per collapsed
         // title (drawn at the remembered pre-collapse position) so the tab stays visible/clickable.
         foreach (var title in _host.CollapsedTitles)
         {
             if (!BoxOrder.Contains(title, StringComparer.OrdinalIgnoreCase)) continue;
             if (!_tabBounds.TryGetValue(title, out var tab)) continue;
+            // A pinned layout wins over the remembered pre-collapse position: the tab sits on the
+            // pinned box's title band, so folding a user-dragged box keeps the tab where they put it.
+            if (_fenceLayouts.TryGetValue(title, out var fl))
+                tab = new RectI(fl.X, fl.Y, fl.Width, FenceHeader.HeaderPx);
             // Also guards tab rects restored from disk (a box saved while poisoned by a truncated
             // park coordinate would otherwise come back off-screen and look like it vanished).
             var safeTab = ReachableTab(tab, screen);
@@ -604,6 +649,131 @@ public sealed class FenceOverlayController : IDisposable
 
     /// <summary>Public entry used by the right-click menu: flip one fence's collapsed state.</summary>
     public void ToggleFence(string title) => OnCollapseToggled(title);
+
+    // --- per-box pinned geometry + colors (个性化): resize drag, settings layout editor, 换色 menu ---
+
+    /// <summary>The pinned rectangle for <paramref name="title"/>, or null when it auto-packs.</summary>
+    public FenceLayout? GetFenceLayout(string title)
+        => _fenceLayouts.TryGetValue(title, out var l) ? l : null;
+
+    /// <summary>The box's current on-screen rectangle: its pinned rectangle when one exists,
+    /// otherwise the live window geometry. Used by the settings layout editor to prefill width/
+    /// height (and as the X/Y anchor when the user types a size for a box that auto-packs).</summary>
+    public RectI? GetCurrentFenceBounds(string title)
+        => GetFenceLayout(title) is { } l
+            ? new RectI(l.X, l.Y, l.Width, l.Height)
+            : _host.GetFenceBounds(title);
+
+    /// <summary>Pins <paramref name="title"/> to a rectangle: re-lays-out its icons to fit, persists,
+    /// redraws. Used by the settings layout editor and the resize drag.</summary>
+    public void SetFenceLayout(string title, FenceLayout layout)
+        => ApplyFenceLayout(title, new RectI(layout.X, layout.Y, layout.Width, layout.Height));
+
+    /// <summary>Unpins a box so it auto-packs with the rest on the next arrange.</summary>
+    public void ClearFenceLayout(string title)
+    {
+        if (_fenceLayouts.Remove(title)) SaveFenceLayouts();
+        ForceRefresh();
+    }
+
+    /// <summary>The per-box color override, or null when it uses the global palette.</summary>
+    public OverlayAppearance? GetFenceAppearance(string title)
+        => _fenceColors.TryGetValue(title, out var c) ? c : null;
+
+    /// <summary>Overrides one box's colors; persists and recolors it live (换色 menu / settings).</summary>
+    public void SetFenceAppearance(string title, OverlayAppearance appearance)
+    {
+        _fenceColors[title] = appearance ?? OverlayAppearance.Default;
+        _host.SetFenceAppearance(title, _fenceColors[title]);
+        SaveFenceColors();
+    }
+
+    /// <summary>Clears a box's color override back to the global palette.</summary>
+    public void ResetFenceAppearance(string title)
+    {
+        _fenceColors.Remove(title);
+        _host.SetFenceAppearance(title, null);
+        SaveFenceColors();
+    }
+
+    /// <summary>Live resize drag: the candidate rect comes in every mouse-move. Apply the window
+    /// geometry instantly (so the box tracks the cursor) and re-lay-out icons throttled to ~12 fps.</summary>
+    private void OnResizeMoved(string title, RectI bounds)
+    {
+        if (!_arranged) return;
+        var b = ClampFenceRect(bounds);
+        _host.SetFenceBounds(title, b); // live box geometry — no icon moves yet
+        if (!_fenceLayouts.TryGetValue(title, out var existing)
+            || existing.X != b.X || existing.Y != b.Y || existing.Width != b.Width || existing.Height != b.Height)
+        {
+            var now = DateTime.UtcNow;
+            if ((now - _lastResizeRelayout).TotalMilliseconds < 80) return;
+            _lastResizeRelayout = now;
+            ApplyFenceLayout(title, b);
+        }
+    }
+
+    /// <summary>Mouse-up after an edge drag: final, unthrottled layout so the box settles exactly
+    /// where the user left it.</summary>
+    private void OnResizeEnded(string title)
+    {
+        if (_fenceLayouts.TryGetValue(title, out var fl))
+            ApplyFenceLayout(title, new RectI(fl.X, fl.Y, fl.Width, fl.Height));
+        else
+            ForceRefresh();
+    }
+
+    /// <summary>Pins a box to <paramref name="b"/> and re-lays-out its icons to fit the rectangle.</summary>
+    private void ApplyFenceLayout(string title, RectI b)
+    {
+        var clamped = ClampFenceRect(b);
+        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
+        try
+        {
+            _layout.ArrangeOneFence(title, clamped, _sortMode);
+        }
+        catch (DesktopAutoArrangeException)
+        {
+            // Same guard as ArrangeAndShow: if auto-arrange came back on, the icon positions were
+            // ignored — roll the pin back so the next arrange auto-packs instead of misaligning.
+            _fenceLayouts.Remove(title);
+        }
+        SaveFenceLayouts();
+        ForceRefresh();
+    }
+
+    /// <summary>Clamps a candidate box rectangle into the virtual desktop with a sane minimum size
+    /// (one icon column + a row below the title band), so a drag can't shrink a box to nothing or
+    /// push it off-screen.</summary>
+    private RectI ClampFenceRect(RectI b)
+    {
+        var cellW = _provider.IconSpacingX;
+        var cellH = _provider.IconSpacingY;
+        var minW = Math.Max(cellW, 60);
+        var minH = Math.Max(FenceHeader.HeaderPx + cellH, 100);
+        var sc = VirtualScreen();
+        int w = sc is { } s ? Math.Clamp(b.Width, minW, Math.Max(minW, s.Width)) : Math.Max(minW, b.Width);
+        int h = sc is { } s2 ? Math.Clamp(b.Height, minH, Math.Max(minH, s2.Height)) : Math.Max(minH, b.Height);
+        int x = b.X, y = b.Y;
+        if (sc is { } s3)
+        {
+            x = Math.Clamp(x, s3.Left, Math.Max(s3.Left, s3.Right - w));
+            y = Math.Clamp(y, s3.Top, Math.Max(s3.Top, s3.Bottom - h));
+        }
+        return new RectI(x, y, w, h);
+    }
+
+    /// <summary>Persists the pinned rectangles. Best-effort: never crash on a disk failure.</summary>
+    private void SaveFenceLayouts()
+    {
+        try { FenceLayoutStore.Save(FenceLayoutFilePath, _fenceLayouts); } catch (Exception) { }
+    }
+
+    /// <summary>Persists the per-box color overrides. Best-effort.</summary>
+    private void SaveFenceColors()
+    {
+        try { FenceColorStore.Save(FenceColorFilePath, _fenceColors); } catch (Exception) { }
+    }
 
     /// <summary>True when <paramref name="title"/> is currently drawn as a collapsed tab.</summary>
     public bool IsCollapsed(string title) => _host.IsCollapsed(title);
@@ -1139,6 +1309,20 @@ public sealed class FenceOverlayController : IDisposable
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-sort.json");
 
+    // Pinned per-box geometry / colors are real user state; tests inject scratch paths so they
+    // neither inherit a previous session's boxes nor overwrite the user's own files with test data.
+    private string FenceLayoutFilePath => _layoutFilePath ?? DefaultFenceLayoutFilePath;
+
+    private static string DefaultFenceLayoutFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "fence-layout.json");
+
+    private string FenceColorFilePath => _colorFilePath ?? DefaultFenceColorFilePath;
+
+    private static string DefaultFenceColorFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "fence-colors.json");
+
     private static string CategoryFilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "DesktopOrganizer", "fence-category.json");
@@ -1236,11 +1420,35 @@ public sealed class FenceOverlayController : IDisposable
     {
         _dragging = false;
         _dragStart = new Dictionary<int, PointI>();
+        // A box the user dragged by its header gets pinned to where it ended up, so the next
+        // arrange keeps it there instead of auto-packing it back into the crowd.
+        PinCurrentBox(title);
         SaveLayout();
         // The box already followed the icons during the drag, so don't re-derive (and possibly
         // re-push) every box from scratch here — that's what moved the OTHER fences around. Record
         // the post-drag positions so the 2s tick sees no change and leaves every box alone.
         _lastIcons = IconPositions(_provider.GetIcons());
+    }
+
+    /// <summary>Pins <paramref name="title"/>'s current icon-derived box rectangle into the pinned
+    /// layout (clamped), so drags survive re-arranges and restarts. Best-effort.</summary>
+    private void PinCurrentBox(string title)
+    {
+        try
+        {
+            var icons = _provider.GetIcons().Where(ic => GroupTitle(ic) == title)
+                .Select(ic => ic.Position).ToList();
+            if (icons.Count == 0) return;
+            var b = FenceClusterBuilder.BoxBounds(icons, _provider.IconSpacingX, _provider.IconSpacingY,
+                _insets.Left, _insets.Top, _insets.Right, _insets.Bottom, FenceHeader.HeaderPx);
+            var clamped = ClampFenceRect(b);
+            _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
+            SaveFenceLayouts();
+        }
+        catch (Exception)
+        {
+            // Best-effort: an un-pinned box simply auto-packs on the next arrange.
+        }
     }
 
     public void Dispose()
