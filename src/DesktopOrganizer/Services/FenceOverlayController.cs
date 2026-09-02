@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -65,19 +64,16 @@ public sealed class FenceOverlayController : IDisposable
     private DateTime _lastResizeRelayout = DateTime.MinValue;
 
     // Drag state. _membership maps each box title → the ListView item indexes in it (rebuilt each
-    // RefreshOverlay); _dragStart snapshots those positions on DragStarted so deltas map to absolutes.
+    // RefreshOverlay); _dragStart snapshots those positions on DragStarted so the release can
+    // translate them to the dropped rect. While the box is dragged its icons are PARKED off-screen
+    // (same trick as collapse) and the window glides on its own — the icons reappear, already at
+    // their final spot, on release. Nothing moves per frame, so nothing can lag behind anything.
     private IReadOnlyDictionary<string, int[]> _membership = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
     private Dictionary<int, PointI> _dragStart = new();
     private bool _dragging;
-    // Rigid-translation drag: the rect the user grabbed, the rect we last rendered, the pending
-    // coalesced delta, and a clock that caps Win32 bursts to one per frame (see ApplyDragFrame).
     private string _dragTitle = "";
     private RectI _dragStartRect;
-    private RectI _dragRect;
-    private int _pendingDx, _pendingDy;
-    private bool _pendingDrag;
-    private readonly Stopwatch _dragClock = new();
-    private readonly int _dragFrameIntervalMs;
+    private int _lastDeltaX, _lastDeltaY;
 
     // Collapse-to-tab state. Collapsing parks the cluster's real icons off-screen (negative
     // coordinates) and leaves a thin tab; these two maps remember the pre-collapse icon positions
@@ -140,8 +136,7 @@ public sealed class FenceOverlayController : IDisposable
         string? colorFilePath = null,
         string? boxInsetFilePath = null,
         string? fenceInsetFilePath = null,
-        string? desktopLayoutFilePath = null,
-        int dragFrameIntervalMs = 12)
+        string? desktopLayoutFilePath = null)
     {
         _titleResolver = titleResolver;
         _screenProvider = screenProvider;
@@ -151,7 +146,6 @@ public sealed class FenceOverlayController : IDisposable
         _boxInsetFilePath = boxInsetFilePath;
         _fenceInsetFilePath = fenceInsetFilePath;
         _desktopLayoutFilePath = desktopLayoutFilePath;
-        _dragFrameIntervalMs = dragFrameIntervalMs;
         _provider = provider;
         _host = host;
 
@@ -1529,14 +1523,14 @@ public sealed class FenceOverlayController : IDisposable
         return true;
     }
 
-    // --- fence dragging: translate the cluster's real icons with the box ---
+    // --- fence dragging: hide the cluster's icons, glide the box, restore on release ---
 
     private void OnDragStarted(string title)
     {
         if (!_membership.TryGetValue(title, out var indexes)) return;
         _dragging = true;
         _dragTitle = title;
-        _pendingDrag = false;
+        _lastDeltaX = _lastDeltaY = 0;
         try
         {
             var byIndex = _provider.GetIcons().ToDictionary(ic => ic.Index);
@@ -1548,92 +1542,66 @@ public sealed class FenceOverlayController : IDisposable
         {
             _dragStart = new Dictionary<int, PointI>();
         }
-        // The rectangle the user actually grabbed. Dragging translates it rigidly, so a box the
-        // user had resized keeps that exact size instead of snapping back to an icon-hugging one.
-        // Falls back to the icon-derived rect when the host never drew the window (headless tests).
+        // The rectangle the user actually grabbed. On release the icons are translated by the drop
+        // rect's offset from it, so a box the user had resized keeps that exact size. Falls back to
+        // the icon-derived rect when the host never drew the window (headless tests).
         _dragStartRect = _host.GetFenceBounds(title) ?? IconBoxRect(title) ?? default;
-        _dragRect = _dragStartRect;
-        _dragClock.Restart();
+
+        // Hide the icons for the duration of the drag: park them off-screen exactly like a collapse
+        // does. The box then glides with the cursor all by itself — a pure WPF move with ZERO
+        // cross-process writes per frame — and on release every icon reappears once, already at
+        // its final spot. There is no per-frame icon traffic left, so the old rubber-band feel
+        // (contents trailing their own frame) is structurally impossible. RefreshOverlay
+        // early-returns while _dragging, so its stranded-icon rescue can't fight the park; and if
+        // the process dies mid-drag, the next refresh's rescue brings the icons back.
+        int sx = Math.Max(1, _provider.IconSpacingX);
+        int sy = Math.Max(1, _provider.IconSpacingY);
+        int slot = 0;
+        foreach (var idx in _dragStart.Keys)
+        {
+            try { _provider.SetPosition(idx, FenceClusterBuilder.ParkSlot(slot++, sx, sy)); }
+            catch (Exception ex) { TraceLog($"[drag] '{title}' hide FAILED #{idx}: {ex.Message}"); }
+        }
     }
 
     private void OnDragMoved(string title, int dx, int dy)
     {
-        if (_dragStart.Count == 0) return;
-        _pendingDx = dx;
-        _pendingDy = dy;
-        _pendingDrag = true;
-        // Coalesce the mouse-move storm into one Win32 burst per frame. A high-polling mouse reports
-        // far more moves than the desktop can repaint, and every frame here costs one cross-process
-        // call per icon — dropping the excess is what keeps the drag from falling behind the cursor.
-        if (_dragFrameIntervalMs <= 0 || !_dragClock.IsRunning
-            || _dragClock.ElapsedMilliseconds >= _dragFrameIntervalMs)
-            ApplyDragFrame();
-    }
-
-    /// <summary>Writes one drag frame: the icons first, then the box at the very same translation.
-    /// Doing both here (rather than letting the window follow the cursor on its own) is the fix for
-    /// the rubber-band feel — the frame can no longer run ahead of the icons it is supposed to hold,
-    /// because both are derived from one number in one tick.</summary>
-    private void ApplyDragFrame()
-    {
-        if (!_pendingDrag || _dragStart.Count == 0) return;
-        _pendingDrag = false;
-        _dragClock.Restart();
-
-        var (dx, dy) = ClampDragDelta(_pendingDx, _pendingDy);
-
-        // Rigid translation: every icon gets the identical delta, so the cluster keeps its shape.
-        // (Clamping each icon separately used to squish the box against a screen edge.)
-        foreach (var (idx, start) in _dragStart)
-            _provider.SetPosition(idx, new PointI(start.X + dx, start.Y + dy));
-
-        _dragRect = new RectI(_dragStartRect.Left + dx, _dragStartRect.Top + dy,
-            _dragStartRect.Width, _dragStartRect.Height);
-        _host.SetFenceBounds(_dragTitle, _dragRect);
-    }
-
-    /// <summary>The screen a drag is limited to: the injected test screen when one is supplied (so
-    /// the clamp is deterministic and machine-independent), otherwise the primary monitor — the same
-    /// grid the icons are packed onto, so a dragged box lands where it will still be packed.</summary>
-    private (int X, int Y, int Width, int Height) DragScreen
-    {
-        get
-        {
-            var s = _screenProvider?.Invoke();
-            return s is { } r ? (r.Left, r.Top, r.Width, r.Height) : Primary;
-        }
-    }
-
-    /// <summary>Limits the translation so the whole box stays on screen. Bounds are computed from
-    /// the box (not per icon) so the limit is a rigid stop rather than a squeeze; a box too wide to
-    /// fit keeps its left/top usable instead of being refused movement entirely.</summary>
-    private (int Dx, int Dy) ClampDragDelta(int dx, int dy)
-    {
-        var (sx, sy, sw, sh) = DragScreen;
-        var r = _dragStartRect;
-        int minDx = sx + LayoutMargin - r.Left;
-        int maxDx = sx + sw - LayoutMargin - r.Right;
-        int minDy = sy + LayoutMargin - r.Top;
-        int maxDy = sy + sh - LayoutMargin - r.Bottom;
-        if (minDx > maxDx) maxDx = minDx;
-        if (minDy > maxDy) maxDy = minDy;
-        return (Math.Clamp(dx, minDx, maxDx), Math.Clamp(dy, minDy, maxDy));
+        // The window moves itself (FenceWindow); only the last cumulative delta is kept, as the
+        // fallback drop spot for hosts that cannot report live geometry on release (headless tests).
+        _lastDeltaX = dx;
+        _lastDeltaY = dy;
     }
 
     private void OnDragEnded(string title)
     {
-        ApplyDragFrame(); // flush the coalesced move so the box lands exactly where the cursor is
         _dragging = false;
+        if (_dragStart.Count == 0) return;
+
+        // Where the user dropped the box: the live window rect (it moved itself during the drag),
+        // falling back to the grabbed rect + the last reported delta.
+        var final = _host.GetFenceBounds(_dragTitle)
+            ?? new RectI(_dragStartRect.Left + _lastDeltaX, _dragStartRect.Top + _lastDeltaY,
+                _dragStartRect.Width, _dragStartRect.Height);
+        var clamped = ClampFenceRect(final);
+        int dx = clamped.Left - _dragStartRect.Left;
+        int dy = clamped.Top - _dragStartRect.Top;
+
+        // Bring the icons back from their drag-hide: every one is translated by the SAME clamped
+        // delta from where the gesture started, so the layout the user had reappears intact and
+        // rigid — one burst of SetPosition, once per drag, instead of once per frame.
+        foreach (var (idx, start) in _dragStart)
+            _provider.SetPosition(idx, new PointI(start.X + dx, start.Y + dy));
         _dragStart = new Dictionary<int, PointI>();
-        _pendingDrag = false;
-        // A box the user dragged by its header gets pinned to where it ended up, so the next
-        // arrange keeps it there instead of auto-packing it back into the crowd. Pinning the rect
-        // we actually rendered (not a freshly derived one) is what removes the snap on release.
-        PinBox(title, _dragRect);
+
+        // The window is already where the cursor left it — correct it only when the clamp had to
+        // pull the drop spot back on screen.
+        if (clamped != final) _host.SetFenceBounds(_dragTitle, clamped);
+
+        // Pin what the user sees, so the next arrange keeps the box there instead of auto-packing
+        // it back into the crowd.
+        PinBox(title, clamped);
         SaveLayout();
-        // The box already followed the icons during the drag, so don't re-derive (and possibly
-        // re-push) every box from scratch here — that's what moved the OTHER fences around. Record
-        // the post-drag positions so the 2s tick sees no change and leaves every box alone.
+        // Record the post-drag positions so the 2s tick sees no change and leaves every box alone.
         _lastIcons = IconPositions(_provider.GetIcons());
     }
 

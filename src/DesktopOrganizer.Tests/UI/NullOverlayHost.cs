@@ -42,9 +42,9 @@ public sealed class NullOverlayHost : IOverlayHost
     public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx)
         => LastClusters = clusters.ToList();
 
-    /// <summary>Every live single-box move the controller asked for (title → rect), newest last.
-    /// The drag path renders the box this way instead of re-syncing the whole mesh, so this is the
-    /// observable record of "the frame moved with the icons" that tests assert against.</summary>
+    /// <summary>Every single-box move the controller asked for (title → rect), newest last. The
+    /// drag path only writes here as a CORRECTIVE snap (when the clamped drop spot differs from
+    /// what the window reported); tests assert against it to verify that clamp.</summary>
     public List<(string Title, RectI Bounds)> MovedBounds { get; } = new();
 
     public void SetFenceBounds(string title, RectI bounds) => MovedBounds.Add((title, bounds));

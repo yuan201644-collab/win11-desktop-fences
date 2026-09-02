@@ -14,8 +14,10 @@ namespace DesktopOrganizer.UI;
 /// (never reparented into the shell — see <see cref="OnSourceInitialized"/>). Its body is an
 /// HTTRANSPARENT hit-test region, so mouse clicks pass through to the real desktop icons underneath
 /// (they still open/select normally), while the translucent box/header is drawn around them and the
-/// header strip stays grabbable to drag the whole cluster. Dragging reports cumulative pixel deltas
-/// via <see cref="ClusterDrag"/> so the controller can move the underlying icons to match.
+/// header strip stays grabbable to drag the whole cluster. Dragging hides the box's icons (the
+/// controller parks them on <see cref="ClusterDragStart"/>) and glides the window itself; the
+/// cumulative delta is still reported via <see cref="ClusterDrag"/> as the controller's fallback
+/// drop anchor when it cannot read live window geometry on release.
 /// </summary>
 public sealed class FenceWindow : Window
 {
@@ -370,10 +372,16 @@ public sealed class FenceWindow : Window
         _lastX = pt.X;
         _lastY = pt.Y;
 
-        // Report the cumulative delta and let the CONTROLLER move both the icons and this window in
-        // one tick. Sliding the window here instead (which is what used to happen) is what produced
-        // the rubber-band feel: the frame ran ahead instantly while the icons it holds still had to
-        // make a cross-process round trip each, so the contents visibly trailed the box.
+        // Glide the box with the cursor directly. The controller parked this box's icons on drag
+        // start (they reappear at the drop spot on release), so a frame costs zero cross-process
+        // writes and can never lag or wobble behind its own contents — the per-frame icon pushes
+        // (and the same-frame coalescing scheme built to tame them) are gone.
+        double sx = GetScaleX(), sy = GetScaleY();
+        Left += dx / Math.Max(0.1, sx);
+        Top += dy / Math.Max(0.1, sy);
+
+        // Keep reporting the cumulative delta: it is the controller's fallback drop anchor when
+        // the host cannot report live window geometry on release (headless hosts).
         ClusterDrag?.Invoke(ClusterTitle, pt.X - _startX, pt.Y - _startY);
     }
 
