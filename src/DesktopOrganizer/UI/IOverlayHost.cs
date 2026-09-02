@@ -27,6 +27,13 @@ public interface IOverlayHost
     /// <summary>Raised once when a drag ends so the controller can finalize and persist.</summary>
     event Action<string>? DragEnded;
 
+    /// <summary>Raised live while the user drags a box edge, with the candidate screen-px rectangle.
+    /// The controller re-lays-out that box's icons and persists the pinned layout (throttled).</summary>
+    event Action<string, RectI>? ResizeMoved;
+
+    /// <summary>Raised once when an edge drag ends (mouse up) — the controller finalizes the layout.</summary>
+    event Action<string>? ResizeEnded;
+
     /// <summary>Palette used to recolor every visible fence live.</summary>
     OverlayAppearance Appearance { get; set; }
 
@@ -35,6 +42,17 @@ public interface IOverlayHost
 
     /// <summary>Resizes the fence mesh to match a fresh cluster layout.</summary>
     void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx);
+
+    /// <summary>Moves/resizes one fence window live (no icon moves) — used while the user drags a box edge.</summary>
+    void SetFenceBounds(string title, RectI bounds);
+
+    /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
+    /// this box (window absent or not laid out). The settings layout editor uses this as the X/Y
+    /// anchor for a box that auto-packs, so typing a width/height pins it in place.</summary>
+    RectI? GetFenceBounds(string title);
+
+    /// <summary>Overrides one fence's palette; null clears the override back to <see cref="Appearance"/>.</summary>
+    void SetFenceAppearance(string title, OverlayAppearance? appearance);
 
     /// <summary>Seeds the remembered collapsed set (loaded from disk) at startup.</summary>
     void SetInitialCollapsed(IEnumerable<string> titles);

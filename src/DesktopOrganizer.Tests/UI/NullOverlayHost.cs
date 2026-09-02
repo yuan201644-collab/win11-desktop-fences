@@ -25,12 +25,29 @@ public sealed class NullOverlayHost : IOverlayHost
     public event Action<string>? DragStarted;
     public event Action<string, int, int>? DragMoved;
     public event Action<string>? DragEnded;
+    public event Action<string, RectI>? ResizeMoved;
+    public event Action<string>? ResizeEnded;
 
     public OverlayAppearance Appearance { get; set; } = OverlayAppearance.Default;
+
+    /// <summary>Per-fence overrides, if the controller set any (observable by tests).</summary>
+    public Dictionary<string, OverlayAppearance> FenceColors { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public void SetVisible(bool visible) { }
 
     public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx) { }
+
+    public void SetFenceBounds(string title, RectI bounds) { }
+
+    /// <summary>Headless host has no windows — the settings editor must not rely on live geometry
+    /// in tests; the pinned-layout path (which needs no window) is the one under test.</summary>
+    public RectI? GetFenceBounds(string title) => null;
+
+    public void SetFenceAppearance(string title, OverlayAppearance? appearance)
+    {
+        if (appearance is null) FenceColors.Remove(title);
+        else FenceColors[title] = appearance;
+    }
 
     public void SetInitialCollapsed(IEnumerable<string> titles)
     {
