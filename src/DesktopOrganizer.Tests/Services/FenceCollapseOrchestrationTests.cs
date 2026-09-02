@@ -46,17 +46,22 @@ public class FenceCollapseOrchestrationTests
     /// mean "parked" and never "the test machine has a small monitor".</summary>
     private static readonly RectI TestScreen = new(0, 0, 4000, 2000);
 
+    /// <param name="twinOf">When set, the LAST icon reuses this index's path. Two icons then share a
+    /// <see cref="FenceOverlayController.StableKey"/>, reproducing the desktop collision that used to
+    /// lose an icon's restore point.</param>
     private static (FenceOverlayController controller, FakeDesktopIconProvider provider, Dictionary<int, PointI> original)
-        Build(int iconCount)
+        Build(int iconCount, int? twinOf = null)
     {
         var provider = new FakeDesktopIconProvider();
         var original = new Dictionary<int, PointI>();
         for (int i = 0; i < iconCount; i++)
         {
-            // Unique path per icon: ExpandRestore re-keys by StableKey (= path), so two icons sharing
-            // a path would collapse into one restore entry and the round-trip would silently lose icons.
             var pos = new PointI(80 + i * 90, 80);
-            provider.Icons.Add(new DesktopIcon(i, $"图标{i}", $@"C:\fake\icon{i}.lnk", pos));
+            // Distinct paths by default; the shared-path case is opt-in per test.
+            var path = twinOf is { } t && i == iconCount - 1
+                ? $@"C:\fake\icon{t}.lnk"
+                : $@"C:\fake\icon{i}.lnk";
+            provider.Icons.Add(new DesktopIcon(i, $"图标{i}", path, pos));
             provider.SetPosition(i, pos); // record into the fake's live-position store
             original[i] = pos;
         }
@@ -135,6 +140,32 @@ public class FenceCollapseOrchestrationTests
         // Expanding must bring all 40 back exactly.
         controller.ToggleFence(BoxTitle);
         Assert.False(controller.IsCollapsed(BoxTitle));
+        AssertAllRestored(provider, original);
+    }
+
+    [Fact]
+    public void Collapse_Expand_RestoresEveryIcon_WhenTwoIconsShareAStableKey()
+    {
+        // Real-world collision: the user desktop and the public desktop can each hold a same-named
+        // entry, and DesktopShellEnumerator maps a display name to ONE path — so two distinct icons
+        // report the same Path and therefore the same StableKey. Two shortcuts pointing at the same
+        // target collide identically.
+        //
+        // Restore points used to be keyed by StableKey, so the second icon overwrote the first's
+        // entry: both icons were parked, only ONE was restored, and the other stayed invisible
+        // off-screen for good. The collapse log counted dictionary entries rather than icons, so
+        // "parked 30" still matched "restored 30" and hid the loss — the only visible trace was a
+        // permanent "[refresh] dropped 1 off-screen icon(s)" in the diagnostics.
+        var (controller, provider, original) = Build(iconCount: 20, twinOf: 7);
+
+        controller.ToggleFence(BoxTitle);
+        Assert.True(controller.IsCollapsed(BoxTitle));
+        AssertAllParked(provider, original);
+
+        controller.ToggleFence(BoxTitle);
+        Assert.False(controller.IsCollapsed(BoxTitle));
+
+        // Every icon — including both halves of the shared-path pair — must be back exactly.
         AssertAllRestored(provider, original);
     }
 

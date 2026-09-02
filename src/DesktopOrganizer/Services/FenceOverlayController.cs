@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -393,6 +394,13 @@ public sealed class FenceOverlayController : IDisposable
         _lastIcons = positions;
         _lastShown = shown;
 
+        // Self-heal: an icon can be left parked with no record able to restore it (older builds
+        // keyed restore points by path, so two same-path icons shared one slot and only one of them
+        // ever came back). Without this it stays invisible until the next restart, because the
+        // constructor is the only other place that rescues stranded icons. RescueStrandedIcons()
+        // skips icons owned by a collapsed fence, so this can never fight an in-progress collapse.
+        RescueStrandedIcons();
+
         // Explorer refreshes (F5 / shell restart) can bounce collapsed icons back onto the visible
         // desktop; re-park any that left the off-screen zone so the fence stays collapsed. Only
         // Explorer can move a hidden icon (the user can't see one to drag it), so this is safe.
@@ -656,7 +664,10 @@ public sealed class FenceOverlayController : IDisposable
         // Snapshot every original position FIRST so a partial SetPosition failure below can never
         // lose an icon's restore point.
         var originals = new Dictionary<string, PointI>(icons.Count, StringComparer.OrdinalIgnoreCase);
-        foreach (var ic in icons) originals[StableKey(ic)] = ic.Position;
+        // Keyed by INDEX, not StableKey: two icons can share a path, and a collision made the
+        // second overwrite the first's restore point — that icon was then parked but never
+        // restored, and stayed invisible off-screen with no record left to bring it back.
+        foreach (var ic in icons) originals[IndexKey(ic.Index)] = ic.Position;
 
         int i = 0;
         foreach (var ic in icons)
@@ -742,7 +753,9 @@ public sealed class FenceOverlayController : IDisposable
             int i = 0;
             foreach (var ic in icons)
             {
-                if (!originals.ContainsKey(StableKey(ic))) continue;
+                // Index keys come from current records; StableKey matches records written by older
+                // builds, which keyed restore points by path.
+                if (!originals.ContainsKey(IndexKey(ic.Index)) && !originals.ContainsKey(StableKey(ic))) continue;
                 if (ic.Position.X > -10000 || ic.Position.Y > -10000)
                 {
                     // Same bounded parking pocket as CollapseHide — never `-32000 - spacing * i`.
@@ -797,14 +810,20 @@ public sealed class FenceOverlayController : IDisposable
             // Build the live lookup by a STABLE, UNIQUE key (the file path), NOT the display name:
             // two icons can share a display name (e.g. two "健身助手" shortcuts), and ToDictionary on
             // names threw ArgumentException — which used to crash expand before a single icon moved.
-            Dictionary<string, DesktopIcon> byKey;
-            try { byKey = BuildKeyIndex(_provider.GetIcons()); }
+            Dictionary<string, DesktopIcon> byIndex, byKey;
+            try
+            {
+                var live = _provider.GetIcons();
+                byIndex = new Dictionary<string, DesktopIcon>(live.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var ic in live) byIndex[IndexKey(ic.Index)] = ic;
+                byKey = BuildKeyIndex(live);
+            }
             catch (Exception ex)
             {
                 TraceLog($"[expand] '{title}' REFUSED: could not read desktop icons (attempt {attempt + 1}): {ex.Message}");
                 return false;
             }
-            if (byKey.Count == 0)
+            if (byIndex.Count == 0)
             {
                 // Explorer likely restarted under us, so GetIcons can't see the desktop yet. Dropping
                 // the record here would strand the parked icons off-screen with no way back — stay
@@ -815,7 +834,8 @@ public sealed class FenceOverlayController : IDisposable
 
             foreach (var key in pending.ToList())
             {
-                if (!byKey.TryGetValue(key, out var ic)) continue; // still absent this attempt
+                var ic = ResolveParkedIcon(byIndex, byKey, key);
+                if (ic is null) continue; // still absent this attempt
                 var pos = originals[key];
                 try { _provider.SetPosition(ic.Index, pos); restored++; pending.Remove(key); }
                 catch (DesktopAutoArrangeException)
@@ -954,11 +974,42 @@ public sealed class FenceOverlayController : IDisposable
         catch { /* logging must never break the app */ }
     }
 
-    /// <summary>A stable, UNIQUE key for an icon: its file path (survives renames, and two icons
+    /// <summary>A stable key for an icon: its file path (survives renames, and two icons
     /// with the same display name but different paths stay distinct). Shell items without a path
     /// fall back to their display name.</summary>
+    /// <remarks>
+    /// <b>Not unique.</b> Two desktop icons can resolve to the same key: the user desktop and the
+    /// public desktop may each hold a same-named entry, and <c>DesktopShellEnumerator</c> maps a
+    /// display name to a single path (see its collision handling), so both icons report the same
+    /// <see cref="DesktopIcon.Path"/>. Two shortcuts pointing at the same target collide the same
+    /// way. Restore points are therefore keyed by <see cref="IndexKey"/>, not by this.
+    /// </remarks>
     internal static string StableKey(DesktopIcon ic) =>
         string.IsNullOrEmpty(ic.Path) ? "name:" + ic.Name : "path:" + ic.Path;
+
+    /// <summary>The key under which a parked icon's restore point is recorded: its ListView item
+    /// index, unique within a desktop snapshot.</summary>
+    /// <remarks>
+    /// Keying by <see cref="StableKey"/> silently lost icons: when two icons shared a key the
+    /// second overwrote the first's restore point, so only one of them was ever moved back and the
+    /// other stayed parked off-screen forever — visible in the diagnostics as a permanent
+    /// <c>[refresh] dropped 1 off-screen icon(s)</c>. The collapse log counted entries, not icons,
+    /// so <c>parked 30</c> / <c>restored 30</c> still looked consistent and hid the loss.
+    /// Records written by older builds keep their <see cref="StableKey"/>; expanding matches those
+    /// by <see cref="StableKey"/> as a fallback.
+    /// </remarks>
+    internal static string IndexKey(int index) => "i:" + index.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>Resolves a restore-point key to a live icon: index keys first (exact, unique), then
+    /// <see cref="StableKey"/> (records from older builds, and icons whose index shifted after an
+    /// Explorer restart). Returns null when the icon isn't visible to the shell yet.</summary>
+    private static DesktopIcon? ResolveParkedIcon(
+        Dictionary<string, DesktopIcon> byIndex,
+        Dictionary<string, DesktopIcon> byKey,
+        string key)
+        => byIndex.TryGetValue(key, out var byIdx) ? byIdx
+         : byKey.TryGetValue(key, out var byStable) ? byStable
+         : null;
 
     /// <summary>Builds an icon lookup keyed by <see cref="StableKey"/>. Never throws on duplicate
     /// display names — the first occurrence wins — which is exactly what used to crash ExpandRestore
