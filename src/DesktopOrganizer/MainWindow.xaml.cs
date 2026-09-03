@@ -1132,7 +1132,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var exe = AutoStartService.CurrentExePath();
+        var exe = AutoStartService.ResolveTargetExe();
         var expected = exe is null ? null : AutoStartService.BuildCommand(exe);
         StartupStatusText.Text = expected is not null && cmd != expected
             ? $"已注册开机启动，但指向的是另一个副本：\n{cmd}\n下次启动会自动修正为当前程序。"

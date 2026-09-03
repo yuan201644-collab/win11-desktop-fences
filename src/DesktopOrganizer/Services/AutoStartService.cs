@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using Microsoft.Win32;
 
 namespace DesktopOrganizer.Services;
@@ -75,7 +76,7 @@ public static class AutoStartService
                 return true;
             }
 
-            var exe = CurrentExePath();
+            var exe = ResolveTargetExe();
             if (string.IsNullOrEmpty(exe)) return false;
 
             var want = BuildCommand(exe);
@@ -99,5 +100,24 @@ public static class AutoStartService
         if (!string.IsNullOrEmpty(p)) return p;
         try { return Process.GetCurrentProcess().MainModule?.FileName; }
         catch (Exception) { return null; }
+    }
+
+    /// <summary>
+    /// The executable the Run entry should point at. Prefers the stable <c>release</c> copy (a sibling
+    /// of the build-output folder the app is currently running from) so a dev launch from <c>run</c>
+    /// never registers that ephemeral build folder as the auto-start target. Falls back to the running
+    /// exe when no <c>release</c> copy exists (e.g. a portable copy elsewhere), preserving prior
+    /// behaviour. <paramref name="fromExePath"/> lets callers (and tests) override the running exe.
+    /// </summary>
+    public static string? ResolveTargetExe(string? fromExePath = null)
+    {
+        var exe = fromExePath ?? CurrentExePath();
+        if (string.IsNullOrEmpty(exe)) return null;
+        var dir = Path.GetDirectoryName(exe);
+        if (string.IsNullOrEmpty(dir)) return exe;
+        var root = Path.GetDirectoryName(dir); // build output (run/ or release/) -> repo root
+        if (string.IsNullOrEmpty(root)) return exe;
+        var candidate = Path.Combine(root, "release", "DesktopOrganizer.exe");
+        return File.Exists(candidate) ? candidate : exe;
     }
 }
