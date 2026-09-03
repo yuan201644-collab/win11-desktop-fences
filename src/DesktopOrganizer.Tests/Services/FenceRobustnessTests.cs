@@ -70,6 +70,20 @@ public class FenceRobustnessTests
     }
 
     [Fact]
+    public void IsArranged_StaysFalseWhileProviderUnavailable_ThenTrueOnceReady()
+    {
+        // The auto-arrange-on-startup retry loop keys off IsArranged to know when to stop retrying.
+        // While the desktop isn't ready it must remain false; once available, a successful arrange flips it.
+        var (controller, provider) = Build(5, available: false);
+        controller.ArrangeAndShow();
+        Assert.False(controller.IsArranged);
+
+        provider.IsAvailable = true;
+        controller.ArrangeAndShow();
+        Assert.True(controller.IsArranged);
+    }
+
+    [Fact]
     public void ProviderUnavailable_ForceRefresh_DoesNotThrow()
     {
         var (controller, _) = Build(5, available: false);

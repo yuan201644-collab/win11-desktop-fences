@@ -46,6 +46,10 @@ public sealed class FenceOverlayController : IDisposable
     private DispatcherTimer? _timer;
     private FenceCategoryConfig _categories;
     private bool _arranged;
+    /// <summary>True once a successful <see cref="ArrangeAndShow"/> has laid the desktop out. Lets a
+    /// caller (e.g. the auto-arrange-on-startup retry loop) tell "tried but desktop wasn't ready yet"
+    /// apart from "actually arranged".</summary>
+    public bool IsArranged => _arranged;
     private FenceSortMode _sortMode;
     private IReadOnlyDictionary<string, PointI> _lastSaved = new Dictionary<string, PointI>();
     // Last seen icon index→position and shell-foreground state; lets RefreshOverlay skip the

@@ -115,7 +115,9 @@ public partial class App : Application
     /// </summary>
     private void OpenWindow(bool silent)
     {
-        var window = new MainWindow();
+        // A logon launch (--startup) should leave the desktop already organised once the shell is up,
+        // so pass the flag through and let MainWindow retry the arrange until the desktop is ready.
+        var window = new MainWindow(autoArrangeOnStart: silent);
         MainWindow = window;
         if (!silent) window.Show();
     }

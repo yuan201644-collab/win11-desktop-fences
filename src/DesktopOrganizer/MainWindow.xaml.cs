@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private bool _loadingStartup;
     private bool _exiting;
     private bool _hasArranged;
+    private readonly bool _autoArrangeOnStart;
     private bool _trayHintShown;
     private Forms.ToolStripMenuItem? _trayAutoStartItem;
     private Forms.ToolStripMenuItem? _trayResetLayoutsItem;
@@ -53,8 +54,9 @@ public partial class MainWindow : Window
     // icons, so only the fill (框底色) is capped.
     private const int MaxFillAlpha = 225;
 
-    public MainWindow()
+    public MainWindow(bool autoArrangeOnStart = false)
     {
+        _autoArrangeOnStart = autoArrangeOnStart;
         InitializeComponent();
         // Surface the build identity in the title bar so it's obvious at a glance which version is
         // running — the project has repeatedly wasted cycles on the user launching a stale exe.
@@ -94,6 +96,40 @@ public partial class MainWindow : Window
         // partially-constructed fields.
         SettingsTabs.SelectionChanged += Tabs_SelectionChanged;
         Closing += OnClosing;
+
+        // A logon launch (--startup) is expected to leave the desktop already organised — the whole
+        // point of auto-start. The desktop ListView isn't always ready the instant we run, so don't
+        // fire one ArrangeAndShow and give up; retry on a timer until it succeeds or we time out.
+        if (_autoArrangeOnStart) ScheduleAutoArrange();
+    }
+
+    /// <summary>
+    /// Repeatedly tries <see cref="ArrangeFromTray"/> until the desktop is ready. Each attempt is a
+    /// no-op while <c>IDesktopIconProvider.IsAvailable</c> is false (e.g. Explorer still starting up),
+    /// so we just wait and retry. Caps out so a permanently-unavailable desktop never spins forever;
+    /// the user can still arrange manually from the tray.
+    /// </summary>
+    private void ScheduleAutoArrange()
+    {
+        _hasArranged = true; // mark so later sort/inset edits know a layout exists to re-apply
+        var attempts = 0;
+        const int maxAttempts = 20;   // 20 × 3s ≈ 60s window after logon
+        var timer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(3),
+        };
+        timer.Tick += (_, _) =>
+        {
+            attempts++;
+            _overlay.ArrangeAndShow();
+            if (_overlay.IsArranged)
+            {
+                timer.Stop();
+                return;
+            }
+            if (attempts >= maxAttempts) timer.Stop();
+        };
+        timer.Start();
     }
 
     /// <summary>Build identity for the title bar: prefers the VERSION.txt written at publish time
