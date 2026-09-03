@@ -1,7 +1,7 @@
-﻿# 一键发布 Windows x64 单文件版本，并同步到外层 run 目录（消除"跑错旧 exe"的反复踩坑）。
+﻿# 一键发布 Windows x64 单文件版本，并同步到外层 run 目录 与 顶层 release\（消除"跑错旧 exe"的反复踩坑）。
 # 用法：
-#   .\publish.ps1                    # 发布到仓库内 .\run，并同步到 ..\run（桌面整理工具\run）
-#   .\publish.ps1 -Output D:\out      # 发布到指定目录（不自动同步外层）
+#   .\publish.ps1                    # 发布到仓库内 .\run，并同步到 ..\run（桌面整理工具\run）与 .\release（稳定副本）
+#   .\publish.ps1 -Output D:\out      # 发布到指定目录（不自动同步外层与 release\）
 #   .\publish.ps1 -Release            # 额外把 exe 上传到 GitHub release v1.1.0（需 gh 已登录）
 param(
     [string]$Output = (Join-Path $PSScriptRoot "run"),
@@ -75,6 +75,29 @@ if (-not $Output.EndsWith([System.IO.Path]::DirectorySeparatorChar + "run")) {
         }
     } catch {
         Write-Host "!!! 外层 run 同步失败（可能被占用？）：$_" -ForegroundColor Red
+        Write-Host "    请先关闭正在运行的 DesktopOrganizer 再发布。" -ForegroundColor Yellow
+    }
+}
+
+# 自动同步到仓库内顶层 release\ 目录（稳定安装副本；自启动现固定指向此处，必须保持最新）。
+# 仅在默认 run 输出时触发，自定义 -Output 不误覆盖 release\。
+if ($Output.EndsWith([System.IO.Path]::DirectorySeparatorChar + "run")) {
+    $releaseDir = Join-Path $PSScriptRoot "release"
+    try {
+        if (-not (Test-Path $releaseDir)) { New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null }
+        $releaseExe = Join-Path $releaseDir "DesktopOrganizer.exe"
+        Copy-Item $exe $releaseExe -Force
+        $pdb = Join-Path $Output "DesktopOrganizer.pdb"
+        if (Test-Path $pdb) { Copy-Item $pdb (Join-Path $releaseDir "DesktopOrganizer.pdb") -Force }
+        Copy-Item (Join-Path $Output "VERSION.txt") (Join-Path $releaseDir "VERSION.txt") -Force
+        $releaseHash = Get-Md5 $releaseExe
+        if ($innerHash -eq $releaseHash) {
+            Write-Host ">>> release\ 已同步，哈希一致：$innerHash" -ForegroundColor Green
+        } else {
+            Write-Host "!!! release\ 同步后哈希不一致（内层 $innerHash / release\ $releaseHash），请检查。" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "!!! release\ 同步失败（可能被占用？）：$_" -ForegroundColor Red
         Write-Host "    请先关闭正在运行的 DesktopOrganizer 再发布。" -ForegroundColor Yellow
     }
 }
