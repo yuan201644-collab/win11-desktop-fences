@@ -1424,6 +1424,23 @@ public sealed class FenceOverlayController : IDisposable
         catch { /* logging must never break the app */ }
     }
 
+    // TEMP DIAGNOSTIC (2026-09-05, remove once the drag-detach mechanism is identified): traces the
+    // whole drag-restore path into drag-diag.log next to the collapse log — start rect provenance,
+    // drop rect source (live window vs delta fallback), clamp correction, and an immediate
+    // read-back of the restored icon positions (SetPosition is async in Explorer; a stale
+    // read-back here would make the 2s tick see phantom movement and re-arrange over the box).
+    private void DragDiag(string line)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(CollapseLogPath)!;
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(Path.Combine(dir, "drag-diag.log"),
+                $"[{DateTime.Now:HH:mm:ss.fff}] {line}{Environment.NewLine}");
+        }
+        catch { /* logging must never break the app */ }
+    }
+
     /// <summary>A stable key for an icon: its file path (survives renames, and two icons
     /// with the same display name but different paths stay distinct). Shell items without a path
     /// fall back to their display name.</summary>
@@ -1772,8 +1789,11 @@ public sealed class FenceOverlayController : IDisposable
         // translated by the drop rect's offset from it, so a box the user had resized keeps that
         // exact size. Falls back to the icon-derived rect when the host never drew the window
         // (headless tests).
-        _dragStartRect = _host.GetFenceBounds(title) ?? IconBoxRect(title) ?? default;
+        var live = _host.GetFenceBounds(title);
+        _dragStartRect = live ?? IconBoxRect(title) ?? default;
         _dragStart = ParkClusterIcons(title);
+        DragDiag($"START \"{title}\" snap={_dragStart.Count} live={(live?.ToString() ?? "NULL(icon-derived)")}" +
+                $" startRect={_dragStartRect}");
     }
 
     private void OnDragMoved(string title, int dx, int dy)
@@ -1791,18 +1811,50 @@ public sealed class FenceOverlayController : IDisposable
 
         // Where the user dropped the box: the live window rect (it moved itself during the drag),
         // falling back to the grabbed rect + the last reported delta.
-        var final = _host.GetFenceBounds(_dragTitle)
+        var live = _host.GetFenceBounds(_dragTitle);
+        var final = live
             ?? new RectI(_dragStartRect.Left + _lastDeltaX, _dragStartRect.Top + _lastDeltaY,
                 _dragStartRect.Width, _dragStartRect.Height);
         var clamped = ClampFenceRect(final);
         int dx = clamped.Left - _dragStartRect.Left;
         int dy = clamped.Top - _dragStartRect.Top;
 
+        // TEMP DIAG: overlap census — if the drop rect crosses other pinned boxes, the restored
+        // icons land inside their territory and GroupTitle may re-assign them on the next tick.
+        var overlaps = _fenceLayouts.Where(kv =>
+            kv.Key != _dragTitle &&
+            clamped.Left < kv.Value.X + kv.Value.Width && kv.Value.X < clamped.Right &&
+            clamped.Top < kv.Value.Y + kv.Value.Height && kv.Value.Y < clamped.Bottom)
+            .Select(kv => kv.Key).ToList();
+        DragDiag($"END \"{_dragTitle}\" snap={_dragStart.Count} src={(live is null ? "FALLBACK(delta)" : "live")}" +
+                $" final={final} clamped={clamped} d=({dx},{dy})" +
+                $" clampFixed={(clamped != final ? "YES" : "no")}" +
+                (overlaps.Count > 0 ? $" OVERLAPS=[{string.Join(",", overlaps)}]" : ""));
+
         // Bring the icons back from their drag-hide: every one is translated by the SAME clamped
         // delta from where the gesture started, so the layout the user had reappears intact and
         // rigid — one burst of SetPosition, once per drag, instead of once per frame.
         foreach (var (idx, start) in _dragStart)
             _provider.SetPosition(idx, new PointI(start.X + dx, start.Y + dy));
+
+        // TEMP DIAG: immediate read-back of the restore. If Explorer has not processed the
+        // SetPosition burst yet, GetIcons still reports the pre-drag (parked) spots — exactly the
+        // stale snapshot the 2s tick would consume as "the user moved icons" and re-arrange over.
+        var readback = _provider.GetIcons().ToDictionary(ic => ic.Index, ic => ic.Position);
+        int mismatch = 0; var sample = new System.Text.StringBuilder();
+        foreach (var (idx, start) in _dragStart)
+        {
+            var want = new PointI(start.X + dx, start.Y + dy);
+            var got = readback.TryGetValue(idx, out var g) ? g : new PointI(-99999, -99999);
+            if (Math.Abs(got.X - want.X) > 1 || Math.Abs(got.Y - want.Y) > 1)
+            {
+                mismatch++;
+                if (sample.Length < 240)
+                    sample.Append($" i{idx} want({want.X},{want.Y}) got({got.X},{got.Y});");
+            }
+        }
+        DragDiag($"READBACK \"{_dragTitle}\" mismatches={mismatch}/{_dragStart.Count}{(mismatch > 0 ? " " + sample : "")}");
+
         _dragStart = new Dictionary<int, PointI>();
 
         // The window is already where the cursor left it — correct it only when the clamp had to
