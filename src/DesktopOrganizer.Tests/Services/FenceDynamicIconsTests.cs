@@ -46,11 +46,71 @@ public class FenceDynamicIconsTests
             colorFilePath: Path.Combine(scratch, "fence-colors.json"),
             boxInsetFilePath: Path.Combine(scratch, "fence-box-insets.json"),
             fenceInsetFilePath: Path.Combine(scratch, "fence-inset.json"),
-            desktopLayoutFilePath: Path.Combine(scratch, "layout.json"));
+            desktopLayoutFilePath: Path.Combine(scratch, "layout.json"),
+            liveSortFilePath: Path.Combine(scratch, "live-sort.json"));
         return (controller, provider, host);
     }
 
     private static int TotalIcons(NullOverlayHost host) => host.LastClusters.Sum(c => c.IconCount);
+
+    [Fact]
+    public void LiveSort_NewIcon_FiledBelowItsBoxBounds()
+    {
+        // Enable BEFORE arranging: icons present at enable-time are the baseline and are never
+        // filed — only icons that appear afterwards are.
+        var (controller, provider, host) = Build(3);
+        controller.LiveSortEnabled = true;
+        controller.ArrangeAndShow();
+        Assert.Equal(3, TotalIcons(host));
+
+        // A brand-new icon appears somewhere far from its box.
+        provider.Icons.Add(new DesktopIcon(42, "资料新", @"C:\fake\dir-new3", new PointI(1500, 700)));
+        provider.SetPosition(42, new PointI(1500, 700));
+
+        controller.ForceRefresh();
+
+        // Filed: just below the box's other members, in their column — not where it appeared.
+        var filed = provider.GetPosition(42);
+        var members = provider.GetIcons().Where(ic => ic.Index != 42).ToList();
+        Assert.NotEqual(new PointI(1500, 700), filed);
+        Assert.True(filed.Y > members.Max(ic => ic.Position.Y),
+            $"filed y={filed.Y} should be below every member (max {members.Max(ic => ic.Position.Y)})");
+        Assert.True(filed.X <= members.Min(ic => ic.Position.X) + provider.IconSpacingX,
+            $"filed x={filed.X} should be in the box's left column");
+        // Filed at most once: a second refresh must not move it again.
+        var after = filed;
+        controller.ForceRefresh();
+        Assert.Equal(after, provider.GetPosition(42));
+    }
+
+    [Fact]
+    public void LiveSort_Disabled_NewIconLeftAlone()
+    {
+        var (controller, provider, host) = Build(3);
+        controller.ArrangeAndShow();
+        Assert.False(controller.LiveSortEnabled); // default OFF — never move icons without consent
+
+        provider.Icons.Add(new DesktopIcon(42, "资料新", @"C:\fake\dir-new4", new PointI(1500, 700)));
+        provider.SetPosition(42, new PointI(1500, 700));
+
+        controller.ForceRefresh();
+        Assert.Equal(new PointI(1500, 700), provider.GetPosition(42));
+    }
+
+    [Fact]
+    public void LiveSort_CollapsedBox_NewIconSkipped()
+    {
+        var (controller, provider, host) = Build(3);
+        controller.ArrangeAndShow();
+        controller.ToggleFence(BoxTitle); // collapse the box
+        controller.LiveSortEnabled = true;
+
+        provider.Icons.Add(new DesktopIcon(42, "资料新", @"C:\fake\dir-new5", new PointI(1500, 700)));
+        provider.SetPosition(42, new PointI(1500, 700));
+
+        controller.ForceRefresh();
+        Assert.Equal(new PointI(1500, 700), provider.GetPosition(42));
+    }
 
     [Fact]
     public void ExplorerRestart_ProviderRecoversOnNextRefresh_MeshRebuilt()

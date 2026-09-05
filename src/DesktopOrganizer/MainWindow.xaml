@@ -210,6 +210,8 @@
                             <TextBlock Text="分类布局" Style="{StaticResource SectionTitle}" />
                             <TextBlock Text="给每个框指定像素尺寸。没动过的框自动打包，填了宽高即固定该框（或直接在桌面上拖动调整）；「清除固定」让它回到自动打包。"
                                        Style="{StaticResource SectionHint}" />
+                            <CheckBox x:Name="LiveSortBox" Content="新图标自动归位（出现的新图标自动放进所属分类框）"
+                                      Margin="0,8,0,0" HorizontalAlignment="Left" />
                             <StackPanel x:Name="LayoutSection" />
                         </StackPanel>
                     </Border>

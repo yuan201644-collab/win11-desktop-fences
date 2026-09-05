@@ -73,7 +73,8 @@ public class FencePersonalizationTests
             colorFilePath: Path.Combine(scratch, "fence-colors.json"),
             boxInsetFilePath: Path.Combine(scratch, "fence-box-insets.json"),
             fenceInsetFilePath: Path.Combine(scratch, "fence-inset.json"),
-            desktopLayoutFilePath: Path.Combine(scratch, "layout.json"));
+            desktopLayoutFilePath: Path.Combine(scratch, "layout.json"),
+            liveSortFilePath: Path.Combine(scratch, "live-sort.json"));
         return new Fixture(controller, provider, host, scratch, realDir);
     }
 

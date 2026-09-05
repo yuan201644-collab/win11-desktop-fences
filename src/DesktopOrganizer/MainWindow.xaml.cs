@@ -78,6 +78,7 @@ public partial class MainWindow : Window
         BuildRuleSection();
         BuildCategorySection();
         BuildLayoutSection();
+        InitLiveSortToggle();
         InitStartupSection();
 
         // Closing the window (×) no longer quits — the app keeps running in the background so the
@@ -644,6 +645,28 @@ public partial class MainWindow : Window
             LayoutSection.Children.Add(BuildLayoutRow(title));
     }
 
+    /// <summary>Wires the LiveSort toggle (分类布局 page). Handlers are attached here rather than in
+    /// XAML because the settings tabs are rebuilt on entry (SelectionChanged) — the same reason the
+    /// other tab controls are wired manually.</summary>
+    private void InitLiveSortToggle()
+    {
+        _loadingLiveSort = true;
+        LiveSortBox.IsChecked = _overlay.LiveSortEnabled;
+        _loadingLiveSort = false;
+        LiveSortBox.Checked -= LiveSortBox_Toggled;
+        LiveSortBox.Unchecked -= LiveSortBox_Toggled;
+        LiveSortBox.Checked += LiveSortBox_Toggled;
+        LiveSortBox.Unchecked += LiveSortBox_Toggled;
+    }
+
+    private bool _loadingLiveSort;
+
+    private void LiveSortBox_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loadingLiveSort) return; // programmatic IsChecked updates must not persist
+        _overlay.LiveSortEnabled = LiveSortBox.IsChecked == true;
+    }
+
     private UIElement BuildLayoutRow(string title)
     {
         var label = new TextBlock
@@ -796,7 +819,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (LayoutTab.IsSelected) BuildLayoutSection();
+        if (LayoutTab.IsSelected) { BuildLayoutSection(); InitLiveSortToggle(); }
         else if (ColorTab.IsSelected) BuildPerBoxColorSection();
     }
 

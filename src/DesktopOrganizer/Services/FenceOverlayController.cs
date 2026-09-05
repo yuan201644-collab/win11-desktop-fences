@@ -147,7 +147,8 @@ public sealed class FenceOverlayController : IDisposable
         string? colorFilePath = null,
         string? boxInsetFilePath = null,
         string? fenceInsetFilePath = null,
-        string? desktopLayoutFilePath = null)
+        string? desktopLayoutFilePath = null,
+        string? liveSortFilePath = null)
     {
         _titleResolver = titleResolver;
         _screenProvider = screenProvider;
@@ -157,6 +158,7 @@ public sealed class FenceOverlayController : IDisposable
         _boxInsetFilePath = boxInsetFilePath;
         _fenceInsetFilePath = fenceInsetFilePath;
         _desktopLayoutFilePath = desktopLayoutFilePath;
+        _liveSortFilePath = liveSortFilePath;
         _provider = provider;
         _host = host;
 
@@ -233,6 +235,32 @@ public sealed class FenceOverlayController : IDisposable
     private DispatcherTimer? _rescueRetryTimer;
     private int _rescueRetryCount;
     private RectI? _lastScreen;
+
+    private readonly string? _liveSortFilePath;
+    private bool? _liveSort;
+    private HashSet<int>? _knownIconIndexes;
+
+    private string LiveSortFilePath => _liveSortFilePath ?? DefaultLiveSortFilePath;
+
+    private static string DefaultLiveSortFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DesktopOrganizer", "live-sort.json");
+
+    /// <summary>LiveSort: file newly-appeared desktop icons into their fence. Persisted; defaults
+    /// to OFF so the tool never moves the user's icons without an explicit opt-in.</summary>
+    public bool LiveSortEnabled
+    {
+        get
+        {
+            _liveSort ??= LiveSortStore.Load(LiveSortFilePath);
+            return _liveSort.Value;
+        }
+        set
+        {
+            _liveSort = value;
+            try { LiveSortStore.Save(LiveSortFilePath, value); } catch (Exception) { }
+        }
+    }
 
     /// <summary>
     /// The constructor rescue is one-shot, so a transient miss (Explorer busy right after a display
@@ -481,6 +509,7 @@ public sealed class FenceOverlayController : IDisposable
             // stayed dead until manually restarted (design gap: "Explorer 重启 watcher").
             if (!_provider.TryRecover()) return;
             _lastIcons = new Dictionary<int, PointI>(); // fresh shell → force a full redraw
+            _knownIconIndexes = null; // re-observe: indexes shifted, do NOT file them as newcomers
         }
 
         // Don't disturb the mesh mid-gesture — the user's hand is on the icons (drag or resize).
@@ -507,6 +536,13 @@ public sealed class FenceOverlayController : IDisposable
         // Idempotent: if neither the icon positions nor the shell-foreground visibility changed,
         // re-rendering the layered windows would just make them flash — skip it entirely.
         var icons = _provider.GetIcons();
+
+        // LiveSort runs BEFORE the idle-skip: enabling the option on a quiet desktop must still
+        // establish its baseline, and a newcomer must be filed even though it is itself the only
+        // change the tick would see.
+        LiveSortNewIcons(icons, currentScreen);
+        icons = _provider.GetIcons(); // fresh snapshot after any filing
+
         var positions = IconPositions(icons);
         bool shown = ShouldShowFences();
 
@@ -1475,6 +1511,58 @@ public sealed class FenceOverlayController : IDisposable
             return new RectI((int)SystemParameters.VirtualScreenLeft, (int)SystemParameters.VirtualScreenTop, w, h);
         }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// LiveSort: files newly-appeared desktop icons into their category box. A newcomer lands one
+    /// row below its box's current bounds (its own position excluded from the bounds), clamped into
+    /// the virtual desktop. Collapsed boxes (and boxes with no visible member yet) are skipped —
+    /// the icon stays where Explorer put it. Newly-seen indexes are always recorded, so an icon is
+    /// filed at most once, and the baseline is re-observed (not filed) after a shell recovery.
+    /// </summary>
+    private void LiveSortNewIcons(IReadOnlyList<DesktopIcon> icons, RectI? screen)
+    {
+        if (!LiveSortEnabled) return;
+        var current = icons.Select(ic => ic.Index).ToHashSet();
+        if (_knownIconIndexes is null)
+        {
+            _knownIconIndexes = current; // first observation after (re)arrange: learn the baseline
+            return;
+        }
+
+        var newcomers = icons.Where(ic => !_knownIconIndexes.Contains(ic.Index)).ToList();
+        if (newcomers.Count == 0) return;
+
+        int cw = Math.Max(1, _provider.IconSpacingX);
+        int chh = Math.Max(1, _provider.IconSpacingY);
+        foreach (var ic in newcomers)
+        {
+            var title = GroupTitle(ic);
+            if (_host.IsCollapsed(title)) continue;
+            var members = icons.Where(x => x.Index != ic.Index && GroupTitle(x) == title)
+                .Select(x => x.Position).ToList();
+            if (members.Count == 0) continue; // no visible anchor to attach it to
+            try
+            {
+                var i = BoxInsetsFor(title);
+                var bounds = FenceClusterBuilder.BoxBounds(members, cw, chh,
+                    i.Left, i.Top, i.Right, i.Bottom, FenceHeader.HeaderPx);
+                var x = bounds.Left;
+                var y = bounds.Bottom;
+                if (screen is { } sc)
+                {
+                    x = Math.Clamp(x, sc.Left, Math.Max(sc.Left, sc.Right - cw));
+                    y = Math.Clamp(y, sc.Top, Math.Max(sc.Top, sc.Bottom - chh));
+                }
+                _provider.SetPosition(ic.Index, new PointI(x, y));
+                TraceLog($"[livesort] filed '{ic.Name}' into '{title}' @ {x},{y}");
+            }
+            catch (Exception ex)
+            {
+                TraceLog($"[livesort] FAILED '{ic.Name}': {ex.Message}");
+            }
+        }
+        _knownIconIndexes = current;
     }
 
     /// <summary>
