@@ -30,5 +30,11 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
     public bool DisableAutoArrangeResult { get; set; } = true;
     public bool DisableAutoArrange() => DisableAutoArrangeResult;
 
+    // Recovery seam: a test sets IsAvailable=false (shell gone), later flips it back, and the
+    // controller's per-tick TryRecover attempt should resume. Return value mirrors the real
+    // provider: true when (now) available.
+    public Func<bool>? TryRecoverHook { get; set; }
+    public bool TryRecover() => TryRecoverHook?.Invoke() ?? IsAvailable;
+
     public void Dispose() { }
 }

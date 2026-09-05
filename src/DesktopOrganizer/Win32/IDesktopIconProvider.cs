@@ -21,4 +21,10 @@ public interface IDesktopIconProvider : IDisposable
     /// <summary>Clears the desktop listview's "Auto arrange" style so <see cref="SetPosition"/> is
     /// honored. Returns true when auto-arrange is off afterwards.</summary>
     bool DisableAutoArrange();
+
+    /// <summary>Attempts to re-acquire the desktop hook after it went stale (an Explorer restart
+    /// invalidates the cached window handle and the cross-process channel). Returns true when the
+    /// provider is available again. A provider that never went stale should return its current
+    /// availability without doing anything.</summary>
+    bool TryRecover();
 }

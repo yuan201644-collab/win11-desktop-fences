@@ -467,10 +467,20 @@ public sealed class FenceOverlayController : IDisposable
     /// </summary>
     public void RefreshOverlay()
     {
-        if (!_arranged || !_provider.IsAvailable)
+        if (!_arranged)
         {
             _host.SetVisible(false);
             return;
+        }
+
+        if (!_provider.IsAvailable)
+        {
+            _host.SetVisible(false);
+            // An Explorer restart kills the provider's cached window handle and cross-process
+            // channel. Give the provider one re-acquire attempt per tick; without this the app
+            // stayed dead until manually restarted (design gap: "Explorer 重启 watcher").
+            if (!_provider.TryRecover()) return;
+            _lastIcons = new Dictionary<int, PointI>(); // fresh shell → force a full redraw
         }
 
         // Don't disturb the mesh mid-gesture — the user's hand is on the icons (drag or resize).

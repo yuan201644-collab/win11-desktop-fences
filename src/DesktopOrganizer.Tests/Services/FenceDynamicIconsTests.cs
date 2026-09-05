@@ -53,6 +53,34 @@ public class FenceDynamicIconsTests
     private static int TotalIcons(NullOverlayHost host) => host.LastClusters.Sum(c => c.IconCount);
 
     [Fact]
+    public void ExplorerRestart_ProviderRecoversOnNextRefresh_MeshRebuilt()
+    {
+        // Design gap "Explorer 重启 watcher": after an Explorer restart the provider's cached
+        // window handle is dead and RefreshOverlay used to early-return forever — the app stayed
+        // broken until manually restarted. The controller now gives the provider one re-acquire
+        // attempt per tick and rebuilds the mesh as soon as it succeeds.
+        var (controller, provider, host) = Build(3);
+        controller.ArrangeAndShow();
+        Assert.Equal(3, TotalIcons(host));
+
+        // The shell restarts: the provider goes away, and a new icon exists in the new shell.
+        provider.IsAvailable = false;
+        provider.Icons.Add(new DesktopIcon(3, "资料新", @"C:\fake\dir-new2", new PointI(1000, 400)));
+        provider.SetPosition(3, new PointI(1000, 400));
+
+        // Recovery fails this tick: the mesh must NOT be rebuilt with the dead shell yet.
+        provider.TryRecoverHook = () => false;
+        Assert.Null(Record.Exception(() => controller.ForceRefresh()));
+        Assert.Equal(3, TotalIcons(host));
+
+        // Recovery succeeds on a later tick: one re-acquire attempt per refresh, and the mesh is
+        // rebuilt from the fresh shell — the new icon is clustered in.
+        provider.TryRecoverHook = () => { provider.IsAvailable = true; return true; };
+        controller.ForceRefresh();
+        Assert.Equal(4, TotalIcons(host));
+    }
+
+    [Fact]
     public void RuntimeIconAdded_RefreshRegroupsNewIconWithoutLoss()
     {
         var (controller, provider, host) = Build(3);

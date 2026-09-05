@@ -8,20 +8,31 @@ namespace DesktopOrganizer.Win32;
 
 public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
 {
-    private readonly IntPtr _hwnd;
-    private readonly bool _available;
+    // Mutable because an Explorer restart invalidates every cached value: the hwnd dies, the
+    // client origin changes and the marshaller's cross-process channel points at a dead PID.
+    // TryRecover re-runs Discover to rebind all of them.
+    private IntPtr _hwnd;
+    private bool _available;
+    private IReadOnlyDictionary<string, string> _nameToPath = new Dictionary<string, string>();
+    private int _clientLeft;
+    private int _clientTop;
 
     // Auto-arrange probe cache (see AutoArrangeOn): 0 = never probed.
     private const long StyleProbeTtlMs = 1000;
     private bool _autoArrangeOn;
     private long _styleProbedAt;
-    private readonly IReadOnlyDictionary<string, string> _nameToPath;
-    private readonly int _clientLeft;
-    private readonly int _clientTop;
     private LvItemMarshaller? _marshaller;
 
     public SysListView32Provider()
     {
+        Discover();
+    }
+
+    private void Discover()
+    {
+        _marshaller?.Dispose();
+        _marshaller = null;
+        _styleProbedAt = 0;
         try
         {
             _hwnd = DesktopWindowLocator.FindDesktopListView();
@@ -57,7 +68,14 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
     }
 
     public IntPtr Handle => _hwnd;
-    public bool IsAvailable => _available;
+
+    /// <summary>
+    /// Available AND the cached window handle still alive. After an Explorer restart the old
+    /// <c>HWND</c> is dead (or recycled), so availability must be verified per query rather than
+    /// cached from construction time — otherwise the app would keep issuing calls into a dead
+    /// window forever.
+    /// </summary>
+    public bool IsAvailable => _available && NativeMethods.IsWindow(_hwnd);
     public int IconSpacingX => Spacing(1);
     public int IconSpacingY => Spacing(0);
 
@@ -174,6 +192,19 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         if (_marshaller is not null) return;
         NativeMethods.GetWindowThreadProcessId(_hwnd, out var pid);
         _marshaller = new LvItemMarshaller(pid);
+    }
+
+    /// <summary>
+    /// Re-acquires the desktop hook after an Explorer restart: the cached hwnd is dead, the
+    /// desktop listview lives in a new (possibly different-PID) process, and the marshaller's
+    /// cross-process channel is stale. Re-runs discovery from scratch and rebuilds the marshaller.
+    /// A no-op (returning true) while the current handle is still alive.
+    /// </summary>
+    public bool TryRecover()
+    {
+        if (_available && NativeMethods.IsWindow(_hwnd)) return true;
+        Discover();
+        return _available;
     }
 
     public void Dispose() => _marshaller?.Dispose();
