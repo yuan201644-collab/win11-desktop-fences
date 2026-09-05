@@ -1522,10 +1522,18 @@ public sealed class FenceOverlayController : IDisposable
         if (_screenProvider is not null) return _screenProvider();
         try
         {
-            int w = (int)SystemParameters.VirtualScreenWidth;
-            int h = (int)SystemParameters.VirtualScreenHeight;
+            // Win32 virtual-screen metrics, queried live. WPF's SystemParameters.*VirtualScreen*
+            // has already lied twice on this machine: it reported 4480x1080 while the real
+            // virtual screen was 4480x1600 (mis-clamping layouts), and topology changes around a
+            // monitor rescale were missed entirely — silencing the display-change handler below.
+            // The SM_*VIRTUALSCREEN indices are stable Win32 constants:
+            // 76=X, 77=Y, 78=CX, 79=CY (per-monitor-DPI aware: physical pixels, current topology).
+            int x = NativeMethods.GetSystemMetrics(76);
+            int y = NativeMethods.GetSystemMetrics(77);
+            int w = NativeMethods.GetSystemMetrics(78);
+            int h = NativeMethods.GetSystemMetrics(79);
             if (w <= 0 || h <= 0) return null;
-            return new RectI((int)SystemParameters.VirtualScreenLeft, (int)SystemParameters.VirtualScreenTop, w, h);
+            return new RectI(x, y, w, h);
         }
         catch { return null; }
     }

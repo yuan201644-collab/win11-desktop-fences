@@ -67,6 +67,32 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         }
     }
 
+    /// <summary>
+    /// Re-reads the listview's window origin. The desktop listview's client (0,0) maps to the
+    /// virtual screen's top-left, which moves whenever monitors are added, removed or rearranged —
+    /// including a monitor that disappears and comes back while the app keeps running. The origin
+    /// used to be cached once in <see cref="Discover"/>: started while a monitor was absent, every
+    /// later read AND write was offset by exactly that monitor's width — the whole desktop
+    /// silently landed on the wrong screen, and because reads carried the identical offset the
+    /// app's own consistency checks (rescue, refresh, same-position skip) all saw a healthy
+    /// layout. GetWindowRect is a local win32k query (no cross-process round trip), so re-probing
+    /// per read/write is effectively free. A failed probe keeps the previous origin — never
+    /// degrade to (0,0) on a transient error.
+    /// </summary>
+    private void RefreshClientOrigin()
+    {
+        if (!_available || !NativeMethods.IsWindow(_hwnd)) return;
+        try
+        {
+            if (NativeMethods.GetWindowRect(_hwnd, out var r))
+            {
+                _clientLeft = r.Left;
+                _clientTop = r.Top;
+            }
+        }
+        catch { /* keep the previous origin */ }
+    }
+
     public IntPtr Handle => _hwnd;
 
     /// <summary>
@@ -107,6 +133,7 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
     {
         var result = new List<DesktopIcon>();
         if (!_available) return result;
+        RefreshClientOrigin(); // monitor topology may have moved the listview since last tick
         EnsureMarshaller();
         var n = Count;
         for (var i = 0; i < n; i++)
@@ -126,6 +153,7 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
 
     public PointI GetPosition(int index)
     {
+        RefreshClientOrigin();
         EnsureMarshaller();
         var (x, y) = _marshaller!.ReadItemPosition(_hwnd, index);
         return new PointI(x + _clientLeft, y + _clientTop); // client → screen
@@ -161,6 +189,7 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
     public void SetPosition(int index, PointI screenPos)
     {
         if (!_available) return;
+        RefreshClientOrigin(); // write in the CURRENT topology, not the one at startup
         // The style query is a cross-process round trip into Explorer, and SetPosition is called once
         // per icon per frame while a box is dragged (and once per icon on every arrange) — querying
         // it inline roughly doubled the cost of a drag frame. The bit only changes when the user
