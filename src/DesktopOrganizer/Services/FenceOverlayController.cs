@@ -223,7 +223,34 @@ public sealed class FenceOverlayController : IDisposable
         // Rescue any icon left parked off-screen by a prior crash whose collapse record was lost
         // (e.g. an expand that threw before it persisted). Without this, such icons stay invisible
         // with no tab to bring them back. Icons that are intentionally collapsed are left alone.
-        if (_provider.IsAvailable) RescueStrandedIcons();
+        if (_provider.IsAvailable)
+        {
+            RescueStrandedIcons();
+            StartRescueRetries();
+        }
+    }
+
+    private DispatcherTimer? _rescueRetryTimer;
+    private int _rescueRetryCount;
+
+    /// <summary>
+    /// The constructor rescue is one-shot, so a transient miss (Explorer busy right after a display
+    /// change, or a position read that silently fails) would strand icons with no second chance:
+    /// <see cref="RefreshOverlay"/> early-returns while nothing is arranged, and the stranded icons
+    /// stay invisible until the next manual arrange. Repeat the pass a few times shortly after
+    /// startup — a no-op when everything is already visible, a lifeline when the first pass missed.
+    /// The timer is lazy-created like <see cref="StartOverlayTimer"/>; timers created on the headless
+    /// test thread never tick, so tests are unaffected.
+    /// </summary>
+    private void StartRescueRetries()
+    {
+        _rescueRetryTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _rescueRetryTimer.Tick += (_, _) =>
+        {
+            RescueStrandedIcons();
+            if (++_rescueRetryCount >= 5) _rescueRetryTimer!.Stop();
+        };
+        _rescueRetryTimer.Start();
     }
 
     /// <summary>

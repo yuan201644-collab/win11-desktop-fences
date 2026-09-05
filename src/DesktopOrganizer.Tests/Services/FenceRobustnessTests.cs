@@ -43,7 +43,12 @@ public class FenceRobustnessTests
         var controller = new FenceOverlayController(
             provider, host, _ => BoxTitle,
             screenProvider: screen ?? (() => TestScreen),
-            collapseFilePath: Path.Combine(scratch, "fence-collapse.json"));
+            collapseFilePath: Path.Combine(scratch, "fence-collapse.json"),
+            layoutFilePath: Path.Combine(scratch, "fence-layout.json"),
+            colorFilePath: Path.Combine(scratch, "fence-colors.json"),
+            boxInsetFilePath: Path.Combine(scratch, "fence-box-insets.json"),
+            fenceInsetFilePath: Path.Combine(scratch, "fence-inset.json"),
+            desktopLayoutFilePath: Path.Combine(scratch, "layout.json"));
         return (controller, provider);
     }
 
