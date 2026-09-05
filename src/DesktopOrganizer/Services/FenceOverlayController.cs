@@ -232,6 +232,7 @@ public sealed class FenceOverlayController : IDisposable
 
     private DispatcherTimer? _rescueRetryTimer;
     private int _rescueRetryCount;
+    private RectI? _lastScreen;
 
     /// <summary>
     /// The constructor rescue is one-shot, so a transient miss (Explorer busy right after a display
@@ -481,6 +482,18 @@ public sealed class FenceOverlayController : IDisposable
         // any such fence back (rescuing the parked icons) instead of leaving it in that dead state.
         ReconcileCollapsed();
 
+        // Design §5: a display change (resolution, monitor arrangement, primary swap) invalidates
+        // every cached screen coordinate — the 2026-09-05 incident had icons stranded in a region no
+        // monitor covered any more. Detect the new virtual desktop each tick, re-clamp all pinned
+        // fences into it and rescue whatever is now in the phantom zone.
+        var currentScreen = VirtualScreen();
+        if (currentScreen is { } cs && _lastScreen is { } prev &&
+            (cs.X != prev.X || cs.Y != prev.Y || cs.Width != prev.Width || cs.Height != prev.Height))
+        {
+            HandleDisplayChange(cs);
+        }
+        _lastScreen = currentScreen;
+
         // Idempotent: if neither the icon positions nor the shell-foreground visibility changed,
         // re-rendering the layered windows would just make them flash — skip it entirely.
         var icons = _provider.GetIcons();
@@ -509,7 +522,7 @@ public sealed class FenceOverlayController : IDisposable
         // Virtual desktop rect: lets the cluster builder drop stray coordinates (fold-parked
         // icons at -32000, or any icon parked/stranded beyond the monitors) instead of letting
         // one bad point stretch a box — and the title bar with it — across the whole desktop.
-        var screen = VirtualScreen();
+        var screen = currentScreen;
 
         // Group by on-screen box (software split by purpose + folder/file/other), stable order,
         // and remember which ListView indexes each box holds (for dragging). Collapsed boxes are
@@ -1452,6 +1465,28 @@ public sealed class FenceOverlayController : IDisposable
             return new RectI((int)SystemParameters.VirtualScreenLeft, (int)SystemParameters.VirtualScreenTop, w, h);
         }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// The virtual desktop changed (resolution / monitor arrangement / primary swap). Pinned
+    /// fences hold absolute coordinates that may now hang past the new monitors — re-clamp each
+    /// one and re-lay its icons inside, then rescue any icon left in the phantom zone. Unpinned
+    /// boxes need nothing: they are re-packed from live icon positions on every refresh.
+    /// </summary>
+    private void HandleDisplayChange(RectI newScreen)
+    {
+        TraceLog($"[display] virtual screen changed {_lastScreen} -> {newScreen}; "
+                 + $"re-clamping {_fenceLayouts.Count} pinned fence(s) and rescuing");
+        foreach (var title in _fenceLayouts.Keys.ToList())
+        {
+            var fl = _fenceLayouts[title];
+            var clamped = ClampFenceRect(new RectI(fl.X, fl.Y, fl.Width, fl.Height));
+            _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
+            _layout.ArrangeOneFence(title, clamped, _sortMode);
+        }
+        if (_fenceLayouts.Count > 0) SaveFenceLayouts();
+        RescueStrandedIcons();
+        _lastIcons = new Dictionary<int, PointI>(); // bypass the idle-skip so the mesh redraws now
     }
 
     /// <summary>Brings back icons stranded off-screen by a prior crash whose collapse record was

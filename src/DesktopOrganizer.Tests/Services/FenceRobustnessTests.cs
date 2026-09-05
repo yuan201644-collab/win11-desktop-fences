@@ -185,4 +185,52 @@ public class FenceRobustnessTests
                 $"'{ic.Name}' was laid out off the bottom: y={ic.Position.Y} + {cellH} > {screen.Bottom}");
         }
     }
+
+    [Fact]
+    public void DisplayChange_Refresh_RepinsFencesIntoNewScreen_AndRescuesIcons()
+    {
+        // Core of the 2026-09-05 incident, part 2: the monitor ARRANGEMENT changed while the app
+        // was arranged (virtual screen 4480x1080 @(0,0) became 4480x1080 @(-2560,0)). Pinned fences
+        // hold absolute rects; the 2s refresh must notice the new virtual desktop, re-clamp every
+        // pinned fence into it, and rescue icons left in the region no monitor covers any more.
+        var screen = new RectI(0, 0, 4000, 2000);
+        var (controller, provider) = Build(0, screen: () => screen);
+
+        // Real directories so the icons classify into the 文件夹 box (see the fixture-sanity note above).
+        var root = Directory.CreateDirectory(Path.Combine(
+            Path.GetTempPath(), "DesktopOrganizer.Tests.Pinned", Guid.NewGuid().ToString("N"))).FullName;
+        for (var i = 0; i < 6; i++)
+        {
+            var dir = Directory.CreateDirectory(Path.Combine(root, $"资料{i}")).FullName;
+            provider.Icons.Add(new DesktopIcon(i, $"资料{i}", dir, new PointI(80 + i * 120, 80)));
+            provider.SetPosition(i, new PointI(80 + i * 120, 80));
+        }
+
+        controller.ArrangeAndShow();
+        // Pin the box far right — perfectly legal on the 4000-wide screen.
+        controller.SetFenceLayout(BoxTitle, new FenceLayout(3500, 100, 400, 300));
+
+        // The arrangement changes: the right half is no longer covered by any monitor.
+        screen = new RectI(0, 0, 1920, 1080);
+
+        controller.ForceRefresh();
+
+        // The pinned fence must have been re-clamped into the new virtual screen.
+        var pinned = controller.GetFenceLayout(BoxTitle)!;
+        Assert.True(pinned.X + pinned.Width <= 1920,
+            $"pinned fence still hangs past the new right edge: {pinned.X}+{pinned.Width}>1920");
+        Assert.True(pinned.Y + pinned.Height <= 1080,
+            $"pinned fence still hangs past the new bottom edge: {pinned.Y}+{pinned.Height}>1080");
+
+        // Every icon must be on the new screen — none stranded in the phantom zone.
+        var icons = provider.GetIcons();
+        Assert.NotEmpty(icons);
+        var cw = Math.Max(1, provider.IconSpacingX);
+        var chh = Math.Max(1, provider.IconSpacingY);
+        foreach (var ic in icons)
+        {
+            Assert.True(ic.Position.X + cw <= 1920 && ic.Position.Y + chh <= 1080,
+                $"'{ic.Name}' stranded in the phantom zone: {ic.Position}");
+        }
+    }
 }
