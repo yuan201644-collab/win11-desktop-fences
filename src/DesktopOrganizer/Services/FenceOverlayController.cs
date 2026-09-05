@@ -404,7 +404,16 @@ public sealed class FenceOverlayController : IDisposable
                 maxRows, _sortMode, skipTitles: pinned);
             foreach (var title in pinned)
                 if (_fenceLayouts.TryGetValue(title, out var fl))
-                    _layout.ArrangeOneFence(title, new RectI(fl.X, fl.Y, fl.Width, fl.Height), _sortMode);
+                {
+                    // A pinned box must be clamped into the virtual desktop BEFORE its icons are
+                    // laid out. ArrangeOneFence only clamps each icon to the box's own bounds, so a
+                    // pinned rect hanging past the bottom edge (dragged/resized there earlier, or
+                    // left behind by a display change) would place its icons off-screen: invisible
+                    // to the user, yet re-rescued by RescueStrandedIcons on every refresh — an
+                    // endless rescue/refresh loop that makes the icons look like they vanished.
+                    _layout.ArrangeOneFence(
+                        title, ClampFenceRect(new RectI(fl.X, fl.Y, fl.Width, fl.Height)), _sortMode);
+                }
         }
         catch (DesktopAutoArrangeException)
         {

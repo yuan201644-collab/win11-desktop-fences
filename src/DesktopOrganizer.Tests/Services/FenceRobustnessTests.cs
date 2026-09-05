@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Linq;
+using DesktopOrganizer.Core.Classification;
 using DesktopOrganizer.Core.Layout;
 using DesktopOrganizer.Services;
 using DesktopOrganizer.Tests.UI;
@@ -26,7 +28,7 @@ public class FenceRobustnessTests
     private static readonly RectI TestScreen = new(0, 0, 4000, 2000);
 
     private static (FenceOverlayController controller, FakeDesktopIconProvider provider)
-        Build(int iconCount, bool autoArrange = false, bool available = true)
+        Build(int iconCount, bool autoArrange = false, bool available = true, Func<RectI?>? screen = null)
     {
         var provider = new FakeDesktopIconProvider { IsAutoArrangeOn = autoArrange, IsAvailable = available };
         for (int i = 0; i < iconCount; i++)
@@ -40,7 +42,7 @@ public class FenceRobustnessTests
         Directory.CreateDirectory(scratch);
         var controller = new FenceOverlayController(
             provider, host, _ => BoxTitle,
-            screenProvider: () => TestScreen,
+            screenProvider: screen ?? (() => TestScreen),
             collapseFilePath: Path.Combine(scratch, "fence-collapse.json"));
         return (controller, provider);
     }
@@ -117,5 +119,65 @@ public class FenceRobustnessTests
         controller.ArrangeAndShow();
         Assert.Null(Record.Exception(() => controller.ToggleFence(BoxTitle)));
         Assert.True(controller.IsCollapsed(BoxTitle));
+    }
+
+    [Fact]
+    public void PinnedBoxPastScreenBottom_Arrange_KeepsEveryIconOnScreen()
+    {
+        // Real incident (2026-09-05): a box was pinned near the bottom of a LARGE virtual desktop
+        // (dual monitors). The screen then shrank (resolution change / monitor unplugged), leaving the
+        // stored rect hanging past the new bottom edge. ArrangeOneFence clamps each icon only to the
+        // box's OWN bounds and never to the screen, so every icon of that box was laid out off-screen:
+        // invisible to the user, then re-rescued by RescueStrandedIcons on the next refresh and pushed
+        // off-screen again — an endless rescue/refresh loop that made the entire desktop look empty.
+        // ArrangeAndShow must clamp the pinned rect into the virtual desktop BEFORE laying icons out.
+        var screen = new RectI(0, 0, 4000, 2000);
+        var (controller, provider) = Build(0, screen: () => screen);
+
+        // ArrangeOneFence classifies with the REAL grouping (BoxGrouping.FromEntry), NOT the
+        // controller's groupTitle delegate — so these must be REAL directories to actually land in
+        // the "文件夹" box. With fake *.lnk paths the box finds no member, returns early without
+        // moving anything, and this test would pass vacuously (verified: it did).
+        var root = Directory.CreateDirectory(Path.Combine(
+            Path.GetTempPath(), "DesktopOrganizer.Tests.Pinned", Guid.NewGuid().ToString("N"))).FullName;
+        for (var i = 0; i < 6; i++)
+        {
+            var dir = Directory.CreateDirectory(Path.Combine(root, $"资料{i}")).FullName;
+            provider.Icons.Add(new DesktopIcon(i, $"资料{i}", dir, new PointI(80 + i * 120, 80)));
+            provider.SetPosition(i, new PointI(80 + i * 120, 80));
+        }
+
+        // Fixture sanity (same guard as DesktopLayoutServiceTests): the icons must really classify
+        // into the 文件夹 box, or ArrangeOneFence finds no member, returns early without moving
+        // anything, and every assertion below would pass over an empty set (a false green).
+        var folders = provider.GetIcons().Where(ic =>
+            BoxGrouping.FromEntry(new SoftwareGroupingConfig(), ic.Name, ic.Path, null).Title == BoxTitle).ToList();
+        Assert.Equal(6, folders.Count);
+
+        // Pin the box low on the big screen — perfectly legal at this size.
+        controller.SetFenceLayout(BoxTitle, new FenceLayout(100, 1800, 400, 300));
+
+        // The screen shrinks: the stored rect now hangs past the bottom (1800 + 300 = 2100 > 1080).
+        screen = new RectI(0, 0, 4000, 1080);
+
+        Assert.Null(Record.Exception(() => controller.ArrangeAndShow()));
+
+        var icons = provider.GetIcons();
+        var cellH = Math.Max(1, provider.IconSpacingY);
+        Assert.NotEmpty(icons); // guards the vacuous-pass trap above
+
+        // Must have ACTUALLY moved into the pinned box — not left at the starting row, which would
+        // make the on-screen assertions pass vacuously.
+        Assert.True(icons.Any(ic => ic.Position.Y > 400),
+            "图标没有被排进 pinned 框（ArrangeOneFence 提前返回？）。实际 y: "
+            + string.Join(", ", icons.Select(i => i.Position.Y)));
+
+        foreach (var ic in icons)
+        {
+            Assert.True(ic.Position.Y >= screen.Top,
+                $"'{ic.Name}' was laid out above the screen: y={ic.Position.Y}");
+            Assert.True(ic.Position.Y + cellH <= screen.Bottom,
+                $"'{ic.Name}' was laid out off the bottom: y={ic.Position.Y} + {cellH} > {screen.Bottom}");
+        }
     }
 }
