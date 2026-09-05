@@ -15,6 +15,9 @@
          to live in <PropertyGroup> as <Resource>app.ico</Resource> which MSBuild silently ignored,
          causing a XamlParseException ("找不到资源 app.ico") at startup. -->
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- Declares PerMonitorV2 + longPathAware. Replaces the SDK's auto-generated default manifest,
+         which is why the supportedOS compatibility section is spelled out in the file. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
