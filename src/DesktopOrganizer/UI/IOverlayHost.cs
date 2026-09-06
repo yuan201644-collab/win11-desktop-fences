@@ -46,7 +46,7 @@ public interface IOverlayHost
     void SetVisible(bool visible);
 
     /// <summary>Resizes the fence mesh to match a fresh cluster layout.</summary>
-    void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx);
+    void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null);
 
     /// <summary>Moves/resizes one fence window live (no icon moves) — used while the user drags a box edge.</summary>
     void SetFenceBounds(string title, RectI bounds);

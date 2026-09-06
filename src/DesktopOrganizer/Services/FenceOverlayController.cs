@@ -649,7 +649,9 @@ public sealed class FenceOverlayController : IDisposable
                 title, 0, new RectI(safeTab.X, safeTab.Y, Math.Max(24, safeTab.Width), Math.Max(1, safeTab.Height))));
         }
 
-        _host.Sync(clusters, FenceHeader.HeaderPx);
+        // Pinned titles ride along so each fence header can badge itself with the pin glyph.
+        _host.Sync(clusters, FenceHeader.HeaderPx,
+            _fenceLayouts.Count > 0 ? (IReadOnlyCollection<string>)_fenceLayouts.Keys.ToList() : null);
         _host.SetVisible(shown);
         SaveLayout(); // follow manual drags so the final layout persists
     }

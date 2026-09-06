@@ -19,6 +19,7 @@ public sealed class FenceHost : IOverlayHost
 {
     private readonly Dictionary<string, FenceWindow> _fences = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pinnedTitles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, OverlayAppearance> _fenceColors = new(StringComparer.OrdinalIgnoreCase);
     private OverlayAppearance _appearance = OverlayAppearance.Default;
 
@@ -86,13 +87,19 @@ public sealed class FenceHost : IOverlayHost
     /// Resizes the fence mesh to match a fresh cluster layout. Uses each window's own (reparented)
     /// geometry; windows whose title is gone are hidden, and new titles get a window on demand.
     /// </summary>
-    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx)
+    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null)
     {
         // First-wins build: two clusters can never share a title by construction, but a malformed
         // grouping config could in theory produce duplicates — fail safe (keep the first) rather than
         // throw ArgumentException and take the whole overlay down.
         var wanted = new Dictionary<string, FenceCluster>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in clusters) if (!wanted.ContainsKey(c.Title)) wanted[c.Title] = c;
+
+        // Remember which titles are pinned so per-box geometry pushes (SetFenceBounds during a
+        // resize gesture) can keep the pin badge truthful between full syncs.
+        _pinnedTitles.Clear();
+        if (pinnedTitles is not null)
+            foreach (var t in pinnedTitles) _pinnedTitles.Add(t);
 
         foreach (var (title, win) in _fences.ToList())
         {
@@ -104,7 +111,7 @@ public sealed class FenceHost : IOverlayHost
             var win = GetWindow(cluster.Title);
             win.SetIconCount(cluster.IconCount);
             win.Render(cluster.Bounds.Left, cluster.Bounds.Top, cluster.Bounds.Width, cluster.Bounds.Height, headerPx,
-                IsCollapsed(cluster.Title));
+                IsCollapsed(cluster.Title), pinned: _pinnedTitles.Contains(cluster.Title));
             if (!win.IsVisible) win.Show();
         }
     }
@@ -122,7 +129,8 @@ public sealed class FenceHost : IOverlayHost
     public void SetFenceBounds(string title, RectI bounds)
     {
         if (!_fences.TryGetValue(title, out var win)) return;
-        win.Render(bounds.Left, bounds.Top, bounds.Width, bounds.Height, FenceHeader.HeaderPx, IsCollapsed(title));
+        win.Render(bounds.Left, bounds.Top, bounds.Width, bounds.Height, FenceHeader.HeaderPx, IsCollapsed(title),
+            _pinnedTitles.Contains(title));
     }
 
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew

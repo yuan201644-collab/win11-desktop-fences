@@ -40,8 +40,15 @@ public sealed class NullOverlayHost : IOverlayHost
 
     public void SetVisible(bool visible) { }
 
-    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx)
-        => LastClusters = clusters.ToList();
+    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null)
+    {
+        LastClusters = clusters.ToList();
+        LastPinnedTitles = pinnedTitles;
+    }
+
+    /// <summary>The pinned-titles set from the most recent <see cref="Sync"/> call (null when the
+    /// controller passed none), so tests can assert which boxes were drawn as pinned.</summary>
+    public IReadOnlyCollection<string>? LastPinnedTitles { get; private set; }
 
     /// <summary>Every single-box move the controller asked for (title → rect), newest last. The
     /// drag path only writes here as a CORRECTIVE snap (when the clamped drop spot differs from

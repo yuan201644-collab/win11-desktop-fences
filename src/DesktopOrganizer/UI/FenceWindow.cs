@@ -28,6 +28,7 @@ public sealed class FenceWindow : Window
     private readonly TextBlock _title;
     private Border _toggleBtn = null!;
     private TextBlock _toggleGlyph = null!;
+    private TextBlock _pinGlyph = null!;
     private OverlayAppearance _appearance = OverlayAppearance.Default;
 
     // Drag tracking (screen pixels).
@@ -107,6 +108,7 @@ public sealed class FenceWindow : Window
         var headerGrid = new Grid();
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         _title = new TextBlock
         {
             FontSize = 13,
@@ -115,6 +117,18 @@ public sealed class FenceWindow : Window
             Margin = new Thickness(12, 0, 4, 0),
         };
         Grid.SetColumn(_title, 0);
+        // Pinned-position badge: a small pin shown only while this box is pinned, so "why doesn't
+        // this box re-pack with the others" is answerable at a glance.
+        _pinGlyph = new TextBlock
+        {
+            Text = "📌",
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 4, 0),
+            Visibility = Visibility.Collapsed,
+            ToolTip = "已固定位置：整理/刷新时保持此框的位置与大小。右键标题可取消固定。",
+        };
+        Grid.SetColumn(_pinGlyph, 1);
         _toggleGlyph = new TextBlock
         {
             Text = "▾",
@@ -135,8 +149,9 @@ public sealed class FenceWindow : Window
             ToolTip = "折叠 / 展开",
         };
         _toggleBtn.MouseLeftButtonDown += OnToggleClicked;
-        Grid.SetColumn(_toggleBtn, 1);
+        Grid.SetColumn(_toggleBtn, 2);
         headerGrid.Children.Add(_title);
+        headerGrid.Children.Add(_pinGlyph);
         headerGrid.Children.Add(_toggleBtn);
         _header.Child = headerGrid;
         Canvas.SetZIndex(_header, 1);
@@ -206,7 +221,7 @@ public sealed class FenceWindow : Window
     /// <summary>Positions the fence over a cluster's bounds (screen px → DIPs per this window's DPI) and lays out its visuals.
     /// When <paramref name="collapsed"/> the box shrinks to a thin title-band tab (the controller has already
     /// parked the cluster's real icons off-screen, so the tab is all that remains on the desktop).</summary>
-    public void Render(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed)
+    public void Render(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed, bool pinned = false)
     {
         double sx = GetScaleX(), sy = GetScaleY();
         Left = leftPx / Math.Max(0.1, sx);
@@ -218,6 +233,7 @@ public sealed class FenceWindow : Window
 
         // Glyph mirrors the state so the tab itself stays discoverable: ▾ = can collapse, ▸ = can expand.
         _toggleGlyph.Text = collapsed ? "▸" : "▾";
+        _pinGlyph.Visibility = pinned ? Visibility.Visible : Visibility.Collapsed;
 
         // Collapsed: hide the box body and keep just the header (title) spanning the tab width.
         if (collapsed)

@@ -146,6 +146,24 @@ public class FencePersonalizationTests
     }
 
     [Fact]
+    public void Sync_ReceivesPinnedTitles_PinGlyphSource()
+    {
+        // The header pin badge renders from the pinned-titles set the controller hands to Sync.
+        var f = Build();
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
+        f.Controller.ArrangeAndShow();
+
+        Assert.NotNull(f.Host.LastPinnedTitles);
+        Assert.Contains(BoxA, f.Host.LastPinnedTitles!);
+        Assert.DoesNotContain(BoxB, f.Host.LastPinnedTitles!);
+
+        // Unpin everything → the badge set clears (the pin glyph disappears next sync).
+        f.Controller.ResetAllFenceLayouts();
+        f.Controller.ArrangeAndShow();
+        Assert.True(f.Host.LastPinnedTitles is null || f.Host.LastPinnedTitles.Count == 0);
+    }
+
+    [Fact]
     public void SetFenceLayout_OversizedRect_IsClampedToScreen()
     {
         var f = Build();
