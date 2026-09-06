@@ -217,7 +217,7 @@ public partial class MainWindow : Window
         // "所有框恢复自动布局" — one-shot unpin: every box falls back to auto-packing (colors and
         // edge-padding overrides stay). Grayed out while no box is pinned; the Opening hook keeps
         // that fresh, since the menu is built once but the pin state changes any time.
-        _trayResetLayoutsItem = new Forms.ToolStripMenuItem("所有框恢复自动布局");
+        _trayResetLayoutsItem = new Forms.ToolStripMenuItem("取消所有框的固定位置");
         _trayResetLayoutsItem.Click += (_, _) => _overlay.ResetAllFenceLayouts();
         menu.Items.Add(_trayResetLayoutsItem);
         menu.Opening += (_, _) => _trayResetLayoutsItem.Enabled = _overlay.AnyPinnedLayouts;
@@ -333,7 +333,7 @@ public partial class MainWindow : Window
         }
         if (_overlay.AnyPinnedLayouts)
         {
-            var resetLayouts = new System.Windows.Controls.MenuItem { Header = "所有框恢复自动布局" };
+            var resetLayouts = new System.Windows.Controls.MenuItem { Header = "取消所有框的固定位置" };
             resetLayouts.Click += (_, _) => _overlay.ResetAllFenceLayouts();
             cm.Items.Add(resetLayouts);
         }
@@ -1273,7 +1273,7 @@ public partial class MainWindow : Window
         if (!_overlay.HasPersonalization)
         {
             MessageBox.Show("当前没有任何分类框的个性化设置（单独的框颜色 / 框边距 / 固定位置）。",
-                "清除个性化设置", MessageBoxButton.OK, MessageBoxImage.Information);
+                "清除框颜色·边距·固定", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -1283,7 +1283,7 @@ public partial class MainWindow : Window
             "  • 单独设置的框边距\n" +
             "  • 手动固定的框位置\n\n" +
             "清除后所有框将恢复为全局默认外观并自动打包。此操作不可撤销，是否继续？",
-            "清除所有个性化设置", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            "清除框颜色·边距·固定", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (result != MessageBoxResult.Yes) return;
 
         _overlay.ResetAllPersonalization();
@@ -1300,14 +1300,14 @@ public partial class MainWindow : Window
         if (!_overlay.AnyPinnedLayouts)
         {
             MessageBox.Show("当前没有任何分类框被固定位置。",
-                "恢复自动布局", MessageBoxButton.OK, MessageBoxImage.Information);
+                "取消所有框的固定位置", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
         var result = MessageBox.Show(
             "将取消所有分类框的固定位置，恢复为自动打包布局。\n" +
-            "框颜色与框边距设置不受影响。是否继续？",
-            "所有框恢复自动布局", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            "图标不移动；框颜色与框边距设置不受影响。是否继续？",
+            "取消所有框的固定位置", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (result != MessageBoxResult.Yes) return;
 
         _overlay.ResetAllFenceLayouts();

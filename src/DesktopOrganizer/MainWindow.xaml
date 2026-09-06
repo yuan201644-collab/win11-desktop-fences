@@ -152,10 +152,14 @@
 
         <!-- Actions + the transient "已保存" hint. -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="12,12,12,10">
-            <Button Name="GroupButton" Content="整理并显示分组" Click="GroupButton_Click" Padding="10,4,10,4" />
-            <Button Name="RestoreButton" Content="恢复上次布局" Click="RestoreButton_Click" Padding="10,4,10,4" Margin="8,0,0,0" />
-            <Button Name="ClearPersonalizationButton" Content="清除所有个性化设置" Click="ClearPersonalizationButton_Click" Padding="10,4,10,4" Margin="8,0,0,0" />
-            <Button Name="ResetLayoutsButton" Content="所有框恢复自动布局" Click="ResetLayoutsButton_Click" Padding="10,4,10,4" Margin="8,0,0,0" />
+            <Button Name="GroupButton" Content="整理并显示分组" Click="GroupButton_Click" Padding="10,4,10,4"
+                    ToolTip="按分组规则把桌面图标分类，并从主屏起点重新装箱排列。会移动图标本身；拖动固定过的框仍用固定位置。" />
+            <Button Name="RestoreButton" Content="恢复上次布局" Click="RestoreButton_Click" Padding="10,4,10,4" Margin="8,0,0,0"
+                    ToolTip="把图标回滚到最近一次保存的位置快照（含分组和手动调整）。不动框的颜色、边距和固定状态。" />
+            <Button Name="ClearPersonalizationButton" Content="清除框颜色·边距·固定" Click="ClearPersonalizationButton_Click" Padding="10,4,10,4" Margin="8,0,0,0"
+                    ToolTip="把每个框单独设置的颜色、边距、固定位置全部还原为默认（不可撤销）。图标位置不动，全局默认设置不受影响。" />
+            <Button Name="ResetLayoutsButton" Content="取消所有框的固定位置" Click="ResetLayoutsButton_Click" Padding="10,4,10,4" Margin="8,0,0,0"
+                    ToolTip="只解除拖动/缩放留下的固定矩形，框回到贴着图标当前位置的自动模式。图标不移动，颜色和边距保留。" />
             <TextBlock x:Name="SavedHint" Text="已保存" FontSize="13" Foreground="#2E7D32" FontWeight="SemiBold"
                        VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed" />
         </StackPanel>
