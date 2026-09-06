@@ -23,6 +23,11 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
     private long _styleProbedAt;
     private LvItemMarshaller? _marshaller;
 
+    // Explorer 的"对齐图标到网格"晶格（listview client 坐标）：格子 (Cx,Cy)，原点 (Ox,Oy)。
+    // 每次 GetIcons 用实时间距 + 第一个可见图标的相位刷新；观测到之前不做吸附（identity）。
+    private int _gridCx, _gridCy, _gridOx, _gridOy;
+    private bool _gridKnown;
+
     public SysListView32Provider()
     {
         Discover();
@@ -135,6 +140,8 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         if (!_available) return result;
         RefreshClientOrigin(); // monitor topology may have moved the listview since last tick
         EnsureMarshaller();
+        RefreshGridSpacing(); // one extra cross-process call per 2 s tick — negligible
+        var gridSeenVisible = false;
         var n = Count;
         for (var i = 0; i < n; i++)
         {
@@ -142,6 +149,13 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
             {
                 var name = _marshaller!.ReadItemText(_hwnd, i, NativeMethods.LVM_GETITEMTEXTW);
                 var (x, y) = _marshaller.ReadItemPosition(_hwnd, i);
+                if (!gridSeenVisible && y > -30000)
+                {
+                    // First visible icon: Explorer has already snapped it onto the grid lattice,
+                    // so its phase mod the cell pitch IS the lattice origin.
+                    ObserveGrid(x, y);
+                    gridSeenVisible = true;
+                }
                 _nameToPath.TryGetValue(name, out var path);
                 // client 坐标 → 屏幕坐标（供上层与 WPF/屏幕坐标一致）
                 result.Add(new DesktopIcon(i, name, path, new PointI(x + _clientLeft, y + _clientTop)));
@@ -200,8 +214,53 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
                 "Desktop has 'Auto arrange' ON — positions are ignored. Turn it off (right-click desktop → View → uncheck Auto arrange) and retry.");
         EnsureMarshaller();
         // screen → client（listview 原点在虚拟屏左上角，多显示器时可能为负）
-        _marshaller!.SetItemPosition(_hwnd, index, screenPos.X - _clientLeft, screenPos.Y - _clientTop);
+        var rawX = screenPos.X - _clientLeft;
+        var rawY = screenPos.Y - _clientTop;
+        // 屏内目标先吸附到 Explorer 的网格晶格：当"对齐图标到网格"开启时，Explorer 会把每次写入
+        // 重新量化到最近格位，整组图标最多漂移半格（2026-09-06 拖动漂移事故），且该设置在
+        // Explorer 每次重启后都会静默回滚为开。写入预先吸附的坐标后，无论开关状态，我们的意图与
+        // Explorer 的落点都一致。折叠停靠位（屏外 y≈-32000）不属于网格，必须保持精确值。
+        if (_gridKnown && rawY > -30000)
+        {
+            var snapped = SnapToLattice(new PointI(rawX, rawY), _gridCx, _gridCy, _gridOx, _gridOy);
+            rawX = snapped.X;
+            rawY = snapped.Y;
+        }
+        _marshaller!.SetItemPosition(_hwnd, index, rawX, rawY);
     }
+
+    /// <summary>Nearest lattice cell: lattice = origin + k·pitch. Pure static so the rounding
+    /// semantics are unit-testable without a real Explorer. Rounding MUST be half-up
+    /// (floor(v+0.5)), NOT banker's rounding: a drag-restored group shares one phase f, and
+    /// floor(f+0.5) is the same for every member, so the whole group shifts rigidly — with
+    /// Math.Round, a group whose phase is exactly 0.5 splits apart (even/odd k parity).</summary>
+    internal static PointI SnapToLattice(PointI raw, int cellCx, int cellCy, int originX, int originY)
+    {
+        if (cellCx <= 0 || cellCy <= 0) return raw; // unusable pitch — identity, never invent one
+        var kx = (int)Math.Floor((raw.X - originX) / (double)cellCx + 0.5);
+        var ky = (int)Math.Floor((raw.Y - originY) / (double)cellCy + 0.5);
+        return new PointI(originX + kx * cellCx, originY + ky * cellCy);
+    }
+
+    private void RefreshGridSpacing()
+    {
+        try
+        {
+            var (cx, cy) = _marshaller!.GetItemSpacing(_hwnd);
+            if (cx > 0 && cy > 0) { _gridCx = cx; _gridCy = cy; }
+        }
+        catch { /* keep the previous pitch; _gridKnown only flips via ObserveGrid */ }
+    }
+
+    private void ObserveGrid(int rawX, int rawY)
+    {
+        if (_gridCx <= 0 || _gridCy <= 0) return;
+        _gridOx = Mod(rawX, _gridCx);
+        _gridOy = Mod(rawY, _gridCy);
+        _gridKnown = true;
+    }
+
+    private static int Mod(int v, int m) => ((v % m) + m) % m;
 
     /// <summary>Cached "auto arrange" probe (<see cref="SetPosition"/> explains why). Refresh after
     /// <see cref="StyleProbeTtlMs"/> so a manual toggle in Explorer is still picked up within a

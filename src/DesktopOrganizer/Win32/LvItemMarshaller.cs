@@ -52,6 +52,17 @@ internal sealed class LvItemMarshaller : IDisposable
         return (BitConverter.ToInt32(bytes, 0), BitConverter.ToInt32(bytes, 4));
     }
 
+    /// <summary>Grid pitch between adjacent icon cells, as Explorer's snap-to-grid uses it.
+    /// Returns the raw packed DWORD split into (cx, cy) with 16-bit sign handling; (0, 0) when the
+    /// message fails. Caller decides how to interpret an unusable pitch.</summary>
+    internal (int Cx, int Cy) GetItemSpacing(IntPtr listView)
+    {
+        var result = Send(listView, NativeMethods.LVM_GETITEMSPACING, IntPtr.Zero, IntPtr.Zero);
+        int cx = (short)(result.ToInt64() & 0xFFFF);
+        int cy = (short)((result.ToInt64() >> 16) & 0xFFFF);
+        return (cx, cy);
+    }
+
     internal void SetItemPosition(IntPtr listView, int index, int x, int y)
     {
         // 实测结论（多轮 A/B 实验）：
