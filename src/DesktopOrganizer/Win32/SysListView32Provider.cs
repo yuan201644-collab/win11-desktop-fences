@@ -24,9 +24,13 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
     private LvItemMarshaller? _marshaller;
 
     // Explorer 的"对齐图标到网格"晶格（listview client 坐标）：格子 (Cx,Cy)，原点 (Ox,Oy)。
-    // 每次 GetIcons 用实时间距 + 第一个可见图标的相位刷新；观测到之前不做吸附（identity）。
+    // 相位持续自校正（2026-09-06 二次漂移事故）：一次性标定会在开机自动整理后、Explorer
+    // 异步修正落位之前读到我们自己写入的任意位置，把错误相位锁死终身（实测锁定 x≡42 mod 76、
+    // y≡6 mod 82，而真相位 x≡22、y≡2，恒定漂移半格以内）。现改为：记录写入的原始坐标，
+    // 回读 ≠ 写入值 = Explorer 做了网格修正 = 权威相位确认；无确认信号时多数投票兜底。
     private int _gridCx, _gridCy, _gridOx, _gridOy;
     private bool _gridKnown;
+    private readonly Dictionary<int, PointI> _lastWrittenRaw = new(); // index → 我们写入的 client 原始坐标
 
     public SysListView32Provider()
     {
@@ -38,6 +42,7 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         _marshaller?.Dispose();
         _marshaller = null;
         _styleProbedAt = 0;
+        _lastWrittenRaw.Clear(); // Explorer 重启后索引含义可能已变，旧记录不可作为修正信号
         try
         {
             _hwnd = DesktopWindowLocator.FindDesktopListView();
@@ -141,7 +146,9 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         RefreshClientOrigin(); // monitor topology may have moved the listview since last tick
         EnsureMarshaller();
         RefreshGridSpacing(); // one extra cross-process call per 2 s tick — negligible
-        var gridSeenVisible = false;
+        var confirmed = new List<PointI>();  // 回读 ≠ 写入 → Explorer 修正过 → 权威相位样本
+        var candidates = new List<PointI>(); // 全体可见图标 → 多数投票样本
+        var consumed = new List<int>();      // 已消费的写入记录
         var n = Count;
         for (var i = 0; i < n; i++)
         {
@@ -149,12 +156,19 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
             {
                 var name = _marshaller!.ReadItemText(_hwnd, i, NativeMethods.LVM_GETITEMTEXTW);
                 var (x, y) = _marshaller.ReadItemPosition(_hwnd, i);
-                if (!gridSeenVisible && y > -30000)
+                if (y > -30000)
                 {
-                    // First visible icon: Explorer has already snapped it onto the grid lattice,
-                    // so its phase mod the cell pitch IS the lattice origin.
-                    ObserveGrid(x, y);
-                    gridSeenVisible = true;
+                    var raw = new PointI(x, y);
+                    candidates.Add(raw);
+                    if (_lastWrittenRaw.TryGetValue(i, out var written))
+                    {
+                        if (written.X != x || written.Y != y)
+                        {
+                            confirmed.Add(raw); // Explorer 把它挪到了自己的格点上
+                            consumed.Add(i);
+                        }
+                        // 读 == 写：修正尚未落地（或对齐关闭），保留记录等下一轮确认
+                    }
                 }
                 _nameToPath.TryGetValue(name, out var path);
                 // client 坐标 → 屏幕坐标（供上层与 WPF/屏幕坐标一致）
@@ -162,6 +176,8 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
             }
             catch (Win32Exception) { /* skip one icon, keep going */ }
         }
+        foreach (var i in consumed) _lastWrittenRaw.Remove(i);
+        UpdateLatticePhase(confirmed, candidates);
         return result;
     }
 
@@ -170,6 +186,15 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         RefreshClientOrigin();
         EnsureMarshaller();
         var (x, y) = _marshaller!.ReadItemPosition(_hwnd, index);
+        // 拖动松手后的回读路径：Explorer 若修正了我们的写入，这里即刻确认权威相位，
+        // 让下一次手势就用上正确网格（不等 2s 刷新 tick）。
+        if (y > -30000 && _lastWrittenRaw.TryGetValue(index, out var written)
+            && (written.X != x || written.Y != y))
+        {
+            _lastWrittenRaw.Remove(index);
+            if (_gridCx > 0 && _gridCy > 0)
+                ApplyPhase(ResolveLatticePhase(new List<PointI> { new(x, y) }, new List<PointI>(), _gridCx, _gridCy, _gridOx, _gridOy, known: false));
+        }
         return new PointI(x + _clientLeft, y + _clientTop); // client → screen
     }
 
@@ -226,6 +251,8 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
             rawX = snapped.X;
             rawY = snapped.Y;
         }
+        // 记录写入值：下一次回读若与此不同，即证明 Explorer 做了网格修正（权威相位信号）。
+        _lastWrittenRaw[index] = new PointI(rawX, rawY);
         _marshaller!.SetItemPosition(_hwnd, index, rawX, rawY);
     }
 
@@ -252,15 +279,72 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         catch { /* keep the previous pitch; _gridKnown only flips via ObserveGrid */ }
     }
 
-    private void ObserveGrid(int rawX, int rawY)
+    private void UpdateLatticePhase(List<PointI> confirmed, List<PointI> candidates)
     {
         if (_gridCx <= 0 || _gridCy <= 0) return;
-        _gridOx = Mod(rawX, _gridCx);
-        _gridOy = Mod(rawY, _gridCy);
-        _gridKnown = true;
+        var phase = ResolveLatticePhase(confirmed, candidates, _gridCx, _gridCy, _gridOx, _gridOy, _gridKnown);
+        ApplyPhase(phase);
+    }
+
+    private void ApplyPhase((int Ox, int Oy)? phase)
+    {
+        if (phase is { } p)
+        {
+            _gridOx = p.Ox;
+            _gridOy = p.Oy;
+            _gridKnown = true;
+        }
     }
 
     private static int Mod(int v, int m) => ((v % m) + m) % m;
+
+    /// <summary>Lattice phase decision, pure and static for unit testing. Precedence:
+    /// 1) confirmed samples (read ≠ what we wrote ⇒ Explorer itself re-quantized the icon onto
+    /// its true lattice — authoritative; adopt their mode unconditionally);
+    /// 2) unknown phase ⇒ most-voted candidate phase (provisional, corrected later);
+    /// 3) known phase ⇒ only switch when the current phase loses the vote decisively
+    /// (top other bucket ≥ 3 votes AND strictly more than current) — covers icon-size/DPI
+    /// changes without thrashing while corrections are still in flight.</summary>
+    internal static (int Ox, int Oy)? ResolveLatticePhase(
+        IReadOnlyList<PointI> confirmed, IReadOnlyList<PointI> candidates,
+        int cellCx, int cellCy, int curOx, int curOy, bool known)
+    {
+        if (confirmed.Count > 0)
+        {
+            var (best, _) = VotePhase(confirmed, cellCx, cellCy);
+            return best;
+        }
+        var (top, topCount) = VotePhase(candidates, cellCx, cellCy);
+        if (topCount == 0) return null;
+        if (!known) return top;
+        var curCount = CountPhase(candidates, cellCx, cellCy, curOx, curOy);
+        if (top != (curOx, curOy) && topCount >= 3 && curCount < topCount) return top;
+        return null; // keep current phase
+    }
+
+    private static ((int Ox, int Oy), int) VotePhase(IReadOnlyList<PointI> samples, int cellCx, int cellCy)
+    {
+        var votes = new Dictionary<(int, int), int>();
+        foreach (var s in samples)
+        {
+            var key = (Mod(s.X, cellCx), Mod(s.Y, cellCy));
+            votes[key] = votes.GetValueOrDefault(key) + 1;
+        }
+        (int, int) best = default; var bestCount = 0;
+        foreach (var kv in votes)
+        {
+            if (kv.Value > bestCount) { best = kv.Key; bestCount = kv.Value; }
+        }
+        return (best, bestCount);
+    }
+
+    private static int CountPhase(IReadOnlyList<PointI> samples, int cellCx, int cellCy, int ox, int oy)
+    {
+        var n = 0;
+        foreach (var s in samples)
+            if (Mod(s.X, cellCx) == ox && Mod(s.Y, cellCy) == oy) n++;
+        return n;
+    }
 
     /// <summary>Cached "auto arrange" probe (<see cref="SetPosition"/> explains why). Refresh after
     /// <see cref="StyleProbeTtlMs"/> so a manual toggle in Explorer is still picked up within a
