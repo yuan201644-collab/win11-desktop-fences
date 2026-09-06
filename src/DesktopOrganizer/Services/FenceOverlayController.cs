@@ -1881,9 +1881,11 @@ public sealed class FenceOverlayController : IDisposable
 
         // The window follows the ICONS' measured displacement, not the cursor's (no-op when the
         // host already sits there): the box-to-icons offset is carried over the gesture verbatim
-        // instead of being re-randomized by the lattice on every drag.
+        // instead of being re-randomized by the lattice on every drag. The corrective move GLIDES
+        // (magnetic snap) instead of teleporting: the icons land instantly, the box eases the
+        // ≤ half-cell residual onto them.
         if (live is null || live.Value != restored)
-            _host.SetFenceBounds(_dragTitle, restored);
+            _host.SetFenceBoundsAnimated(_dragTitle, restored, MagneticGlideMs);
 
         // Pin what the user sees, so the next arrange keeps the box there instead of auto-packing
         // it back into the crowd. A bare click (no movement — possible now that the park starts at
@@ -1897,6 +1899,10 @@ public sealed class FenceOverlayController : IDisposable
         // Record the post-drag positions so the 2s tick sees no change and leaves every box alone.
         _lastIcons = IconPositions(_provider.GetIcons());
     }
+
+    /// <summary>Drag-release magnetic glide duration (ms): the box eases from the cursor drop spot
+    /// onto the icons' lattice position instead of teleporting. Pure feel — tune freely.</summary>
+    internal const int MagneticGlideMs = 150;
 
     /// <summary>The displacement the restored group actually took: the mode of (readback − start)
     /// over the parked icons. All members share one lattice phase, so one displacement wins the

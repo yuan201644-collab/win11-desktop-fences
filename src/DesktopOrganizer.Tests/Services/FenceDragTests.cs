@@ -322,4 +322,40 @@ public class FenceDragTests
         Assert.Empty(f.Host.MovedBounds); // live == startRect + measured d, nothing to correct
         Assert.Equal(new FenceLayout(440, 440, 420, 300), f.Controller.GetFenceLayout(BoxA));
     }
+
+    [Fact]
+    public void DragEnded_TheMagneticSnapGlidesInsteadOfTeleporting()
+    {
+        // The icons land instantly (one write burst), but the corrective fence move used to
+        // teleport — read as "the box is yanked away from my hand". It must go through the
+        // ANIMATED path with the magnetic glide duration so the box eases onto the lattice spot.
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        // Drop spot yanked off-screen → clamped → a corrective (magnetic) move is needed.
+        f.Host.FenceBoundsOverride = new RectI(3400, 400, 400, 300);
+        f.Host.RaiseDragStarted(BoxA);
+        f.Host.FenceBoundsOverride = new RectI(3900, 400, 400, 300);
+        f.Host.RaiseDragMoved(BoxA, 5000, 0);
+        f.Host.RaiseDragEnded(BoxA);
+
+        var glide = Assert.Single(f.Host.MovedBoundsAnimated);
+        Assert.Equal(BoxA, glide.Title);
+        Assert.Equal(new RectI(3600, 400, 400, 300), glide.Bounds);
+        Assert.Equal(FenceOverlayController.MagneticGlideMs, glide.GlideMs);
+    }
+
+    [Fact]
+    public void ResizeLiveTracking_StaysInstant_NeverGoesThroughTheGlide()
+    {
+        // The resize gesture tracks the cursor frame by frame — it must keep the instant path even
+        // though the drag-end magnetic snap now animates (a lagging resize would feel rubbery).
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Host.RaiseResizeStarted(BoxA);
+        f.Host.RaiseResizeMoved(BoxA, new RectI(300, 350, 430, 300));
+        f.Host.RaiseResizeEnded(BoxA);
+
+        Assert.Single(f.Host.MovedBounds); // the instant live-tracking write happened...
+        Assert.Empty(f.Host.MovedBoundsAnimated); // ...and nothing was animated
+    }
 }

@@ -51,6 +51,11 @@ public interface IOverlayHost
     /// <summary>Moves/resizes one fence window live (no icon moves) — used while the user drags a box edge.</summary>
     void SetFenceBounds(string title, RectI bounds);
 
+    /// <summary>Like <see cref="SetFenceBounds"/>, but the window's position GLIDES to the target
+    /// (ease-out; size still applies instantly) — the drag-release magnetic snap uses this so the
+    /// box eases onto the icons' lattice spot instead of teleporting there.</summary>
+    void SetFenceBoundsAnimated(string title, RectI bounds, int glideMilliseconds);
+
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
     /// this box (window absent or not laid out). The settings layout editor uses this as the X/Y
     /// anchor for a box that auto-packs, so typing a width/height pins it in place.</summary>

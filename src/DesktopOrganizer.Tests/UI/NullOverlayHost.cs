@@ -57,6 +57,17 @@ public sealed class NullOverlayHost : IOverlayHost
 
     public void SetFenceBounds(string title, RectI bounds) => MovedBounds.Add((title, bounds));
 
+    /// <summary>Every animated single-box move (title → rect → glide ms), newest last. The drag-end
+    /// magnetic snap writes here; the target rect is mirrored into <see cref="MovedBounds"/> too, so
+    /// "where did the controller put the box" assertions stay uniform across both paths.</summary>
+    public List<(string Title, RectI Bounds, int GlideMs)> MovedBoundsAnimated { get; } = new();
+
+    public void SetFenceBoundsAnimated(string title, RectI bounds, int glideMilliseconds)
+    {
+        MovedBounds.Add((title, bounds));
+        MovedBoundsAnimated.Add((title, bounds, glideMilliseconds));
+    }
+
     // Test-side triggers for the drag gesture (a real FenceWindow raises these from mouse events).
     public void RaiseDragStarted(string title) => DragStarted?.Invoke(title);
     public void RaiseDragMoved(string title, int dx, int dy) => DragMoved?.Invoke(title, dx, dy);

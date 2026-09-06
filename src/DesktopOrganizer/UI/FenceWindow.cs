@@ -164,6 +164,7 @@ public sealed class FenceWindow : Window
         MouseMove += OnMouseMove;
         MouseLeftButtonUp += OnMouseLeftButtonUp;
         LostMouseCapture += (_, _) => EndDrag();
+        Closed += (_, _) => CancelGlide(); // a mid-glide close must detach the rendering hook
 
         ApplyAppearance();
     }
@@ -223,9 +224,33 @@ public sealed class FenceWindow : Window
     /// parked the cluster's real icons off-screen, so the tab is all that remains on the desktop).</summary>
     public void Render(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed, bool pinned = false)
     {
+        CancelGlide(); // an explicit position is authority — a running glide must never fight it
+        ApplyLayout(leftPx, topPx, widthPx, heightPx, headerPx, collapsed, pinned, glideMs: 0);
+    }
+
+    /// <summary>Like <see cref="Render"/>, but the position GLIDES to the target (ease-out) over
+    /// <paramref name="glideMs"/> while size and glyphs apply instantly. The drag-release magnetic
+    /// snap uses this so the box eases onto the icons' lattice spot instead of teleporting. Any
+    /// explicit <see cref="Render"/> (the 2s refresh) or a fresh grab cancels the glide.</summary>
+    public void RenderAnimated(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed, bool pinned, int glideMs)
+        => ApplyLayout(leftPx, topPx, widthPx, heightPx, headerPx, collapsed, pinned, glideMs);
+
+    private void ApplyLayout(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed, bool pinned, int glideMs)
+    {
         double sx = GetScaleX(), sy = GetScaleY();
-        Left = leftPx / Math.Max(0.1, sx);
-        Top = topPx / Math.Max(0.1, sy);
+        bool shown = !double.IsNaN(Left) && !double.IsNaN(Top);
+        int fromX = shown ? (int)Math.Round(Left * Math.Max(0.1, sx)) : leftPx;
+        int fromY = shown ? (int)Math.Round(Top * Math.Max(0.1, sy)) : topPx;
+        if (glideMs > 0 && shown && (fromX != leftPx || fromY != topPx))
+        {
+            StartGlide(fromX, fromY, leftPx, topPx, glideMs); // position glides; the rest lays out below
+        }
+        else
+        {
+            CancelGlide(); // nothing to glide toward — never leave a stale glide armed
+            Left = leftPx / Math.Max(0.1, sx);
+            Top = topPx / Math.Max(0.1, sy);
+        }
         Width = widthPx / Math.Max(0.1, sx);
 
         double headerDip = headerPx / Math.Max(0.1, sy);
@@ -250,6 +275,50 @@ public sealed class FenceWindow : Window
             _header.Width = Math.Max(0, Width - 3);
             _header.Height = headerDip - 2;
         }
+    }
+
+    // Magnetic glide state (screen px). Driven by CompositionTarget.Rendering (~once per vsync), so
+    // a 150 ms glide costs ~9 frames of pure local Left/Top writes — zero cross-process traffic.
+    private bool _gliding;
+    private int _glideFromX, _glideFromY, _glideToX, _glideToY, _glideMs;
+    private DateTime _glideStart;
+
+    private void StartGlide(int fromX, int fromY, int toX, int toY, int ms)
+    {
+        _glideFromX = fromX;
+        _glideFromY = fromY;
+        _glideToX = toX;
+        _glideToY = toY;
+        _glideMs = Math.Max(1, ms);
+        _glideStart = DateTime.UtcNow;
+        if (!_gliding)
+        {
+            _gliding = true;
+            CompositionTarget.Rendering += OnGlideFrame;
+        }
+    }
+
+    private void CancelGlide()
+    {
+        if (!_gliding) return;
+        _gliding = false;
+        CompositionTarget.Rendering -= OnGlideFrame;
+    }
+
+    private void OnGlideFrame(object? sender, EventArgs e)
+    {
+        double t = (DateTime.UtcNow - _glideStart).TotalMilliseconds / _glideMs;
+        if (t >= 1.0)
+        {
+            CancelGlide();
+            t = 1.0;
+        }
+        double p = 1.0 - Math.Pow(1.0 - t, 3); // ease-out cubic: fast start, soft landing
+        double sx = GetScaleX(), sy = GetScaleY();
+        int x = _glideFromX + (int)Math.Round((_glideToX - _glideFromX) * p);
+        int y = _glideFromY + (int)Math.Round((_glideToY - _glideFromY) * p);
+        Left = x / Math.Max(0.1, sx);
+        Top = y / Math.Max(0.1, sy);
     }
 
     public void SetIconCount(int count)
@@ -280,6 +349,9 @@ public sealed class FenceWindow : Window
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        // Grabbing the box (drag or resize) kills any magnetic glide — the hand is the authority
+        // now, and a glide fighting the gesture's own Left/Top writes would jitter.
+        CancelGlide();
         // The box edges are hittable for resizing; the header reaches us too. An edge grab starts a
         // resize (the controller re-lays-out the icons); anything else on the header is a drag or a
         // double-click toggle.

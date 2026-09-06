@@ -133,6 +133,16 @@ public sealed class FenceHost : IOverlayHost
             _pinnedTitles.Contains(title));
     }
 
+    /// <summary>Like <see cref="SetFenceBounds"/>, but the window's position GLIDES to the target
+    /// (ease-out) over <paramref name="glideMilliseconds"/> while size applies instantly. The
+    /// drag-release magnetic snap uses this so the box eases onto the icons' lattice spot.</summary>
+    public void SetFenceBoundsAnimated(string title, RectI bounds, int glideMilliseconds)
+    {
+        if (!_fences.TryGetValue(title, out var win)) return;
+        win.RenderAnimated(bounds.Left, bounds.Top, bounds.Width, bounds.Height, FenceHeader.HeaderPx,
+            IsCollapsed(title), _pinnedTitles.Contains(title), glideMilliseconds);
+    }
+
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
     /// this box (no window yet, or it was never shown so WPF hasn't assigned geometry).</summary>
     public RectI? GetFenceBounds(string title)
