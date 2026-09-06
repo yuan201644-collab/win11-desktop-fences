@@ -269,6 +269,22 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         return new PointI(originX + kx * cellCx, originY + ky * cellCy);
     }
 
+    /// <summary>Effective rigid-body displacement for a drag restore: snap the destination through
+    /// the lattice and subtract the start. All group members share one phase, so they all quantize
+    /// to the SAME displacement (pinned by UniformPhaseGroup tests) — the fence can safely reuse
+    /// it. Before the lattice is known (or with a unusable pitch) the delta passes through, which
+    /// also keeps headless/test providers exact.</summary>
+    internal static PointI QuantizeDeltaPure(PointI from, PointI delta, int cellCx, int cellCy, int originX, int originY, bool known)
+    {
+        if (!known) return delta;
+        var snapped = SnapToLattice(new PointI(from.X + delta.X, from.Y + delta.Y), cellCx, cellCy, originX, originY);
+        return new PointI(snapped.X - from.X, snapped.Y - from.Y);
+    }
+
+    /// <inheritdoc cref="IDesktopIconProvider.QuantizeDelta"/>
+    public PointI QuantizeDelta(PointI from, PointI delta)
+        => QuantizeDeltaPure(from, delta, _gridCx, _gridCy, _gridOx, _gridOy, _gridKnown);
+
     private void RefreshGridSpacing()
     {
         try

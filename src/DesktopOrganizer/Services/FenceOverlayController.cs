@@ -1829,23 +1829,36 @@ public sealed class FenceOverlayController : IDisposable
         int dx = clamped.Left - _dragStartRect.Left;
         int dy = clamped.Top - _dragStartRect.Top;
 
+        // THIRD 2026-09-06 drift incident: with "align to grid" on, the icon writes below are
+        // quantized onto Explorer's lattice, so the icons' EFFECTIVE displacement is not (dx,dy)
+        // but the snapped-through-lattice d'. The fence used to keep the cursor delta while the
+        // icons took d' — box and icons drifted apart by up to half a cell in a fresh random
+        // direction on EVERY gesture. Authority now belongs to the icons: quantize the delta once
+        // (rigid groups share one phase → one displacement, pinned by the UniformPhase tests),
+        // move the icons by it, and put the fence exactly where that displacement lands.
+        var anchor = _dragStart.OrderBy(kv => kv.Key).First().Value;
+        var d2 = _provider.QuantizeDelta(anchor, new PointI(dx, dy));
+        var restored = ClampFenceRect(new RectI(
+            _dragStartRect.Left + d2.X, _dragStartRect.Top + d2.Y,
+            _dragStartRect.Width, _dragStartRect.Height));
+
         // TEMP DIAG: overlap census — if the drop rect crosses other pinned boxes, the restored
         // icons land inside their territory and GroupTitle may re-assign them on the next tick.
         var overlaps = _fenceLayouts.Where(kv =>
             kv.Key != _dragTitle &&
-            clamped.Left < kv.Value.X + kv.Value.Width && kv.Value.X < clamped.Right &&
-            clamped.Top < kv.Value.Y + kv.Value.Height && kv.Value.Y < clamped.Bottom)
+            restored.Left < kv.Value.X + kv.Value.Width && kv.Value.X < restored.Right &&
+            restored.Top < kv.Value.Y + kv.Value.Height && kv.Value.Y < restored.Bottom)
             .Select(kv => kv.Key).ToList();
         DragDiag($"END \"{_dragTitle}\" snap={_dragStart.Count} src={(live is null ? "FALLBACK(delta)" : "live")}" +
-                $" final={final} clamped={clamped} d=({dx},{dy})" +
-                $" clampFixed={(clamped != final ? "YES" : "no")}" +
+                $" final={final} clamped={clamped} d=({dx},{dy}) d2=({d2.X},{d2.Y})" +
+                $" restored={restored} clampFixed={(clamped != final ? "YES" : "no")}" +
                 (overlaps.Count > 0 ? $" OVERLAPS=[{string.Join(",", overlaps)}]" : ""));
 
-        // Bring the icons back from their drag-hide: every one is translated by the SAME clamped
-        // delta from where the gesture started, so the layout the user had reappears intact and
-        // rigid — one burst of SetPosition, once per drag, instead of once per frame.
+        // Bring the icons back from their drag-hide: every one is translated by the SAME quantized
+        // displacement from where the gesture started, so the layout the user had reappears intact
+        // and rigid — one burst of SetPosition, once per drag, instead of once per frame.
         foreach (var (idx, start) in _dragStart)
-            _provider.SetPosition(idx, new PointI(start.X + dx, start.Y + dy));
+            _provider.SetPosition(idx, new PointI(start.X + d2.X, start.Y + d2.Y));
 
         // TEMP DIAG: immediate read-back of the restore. If Explorer has not processed the
         // SetPosition burst yet, GetIcons still reports the pre-drag (parked) spots — exactly the
@@ -1854,7 +1867,7 @@ public sealed class FenceOverlayController : IDisposable
         int mismatch = 0; var sample = new System.Text.StringBuilder();
         foreach (var (idx, start) in _dragStart)
         {
-            var want = new PointI(start.X + dx, start.Y + dy);
+            var want = new PointI(start.X + d2.X, start.Y + d2.Y);
             var got = readback.TryGetValue(idx, out var g) ? g : new PointI(-99999, -99999);
             if (Math.Abs(got.X - want.X) > 1 || Math.Abs(got.Y - want.Y) > 1)
             {
@@ -1867,17 +1880,19 @@ public sealed class FenceOverlayController : IDisposable
 
         _dragStart = new Dictionary<int, PointI>();
 
-        // The window is already where the cursor left it — correct it only when the clamp had to
-        // pull the drop spot back on screen.
-        if (clamped != final) _host.SetFenceBounds(_dragTitle, clamped);
+        // The window follows the ICONS' displacement, not the cursor's: put it exactly where the
+        // quantized restore lands (no-op when the host already sits there). This keeps the box-to-
+        // icons offset constant across gestures instead of re-randomizing it by up to half a cell.
+        if (live is null || live.Value != restored)
+            _host.SetFenceBounds(_dragTitle, restored);
 
         // Pin what the user sees, so the next arrange keeps the box there instead of auto-packing
         // it back into the crowd. A bare click (no movement — possible now that the park starts at
         // press time) restores the icons untouched and must NOT newly pin an unpinned box: clicking
         // a title is not a layout decision. An already-pinned box just re-pins the same rect.
-        if (dx != 0 || dy != 0 || _fenceLayouts.ContainsKey(title))
+        if (d2.X != 0 || d2.Y != 0 || _fenceLayouts.ContainsKey(title))
         {
-            PinBox(title, clamped);
+            PinBox(title, restored);
             SaveLayout();
         }
         // Record the post-drag positions so the 2s tick sees no change and leaves every box alone.

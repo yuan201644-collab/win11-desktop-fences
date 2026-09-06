@@ -214,4 +214,33 @@ public sealed class LatticePhaseTests
         Assert.Null(SysListView32Provider.ResolveLatticePhase(new List<PointI>(), new List<PointI>(), Cx, Cy, TrueOx, TrueOy, known: true));
         Assert.Null(SysListView32Provider.ResolveLatticePhase(new List<PointI>(), new List<PointI>(), Cx, Cy, 0, 0, known: false));
     }
+
+    [Fact]
+    public void QuantizeDelta_UnknownLattice_PassesThrough()
+    {
+        var delta = new PointI(140, 90);
+        Assert.Equal(delta, SysListView32Provider.QuantizeDeltaPure(new PointI(98, 84), delta, Cx, Cy, TrueOx, TrueOy, known: false));
+    }
+
+    [Fact]
+    public void QuantizeDelta_SnapsTheDestinationThroughTheLattice()
+    {
+        // From a lattice point (98,84), a (20,246) cursor delta lands at (118,330); the lattice
+        // quantizes it to (98,330) — the horizontal 20px is swallowed by the 76px pitch. This is
+        // exactly gesture 21:27:48 from drag-diag.log (want(954,250) → got(934,248) on the
+        // (934,2)-anchored group).
+        var d2 = SysListView32Provider.QuantizeDeltaPure(new PointI(98, 84), new PointI(20, 246), Cx, Cy, TrueOx, TrueOy, known: true);
+        Assert.Equal(new PointI(0, 246), d2);
+    }
+
+    [Fact]
+    public void QuantizeDelta_IsIdenticalForEveryGroupMember()
+    {
+        // THE fence-follows-icons precondition: all group members sit on the lattice, so one
+        // quantized displacement is valid for the whole rigid body.
+        var froms = new[] { new PointI(98, 84), new PointI(250, 166), new PointI(402, 330) };
+        var first = SysListView32Provider.QuantizeDeltaPure(froms[0], new PointI(99, 37), Cx, Cy, TrueOx, TrueOy, known: true);
+        foreach (var from in froms.Skip(1))
+            Assert.Equal(first, SysListView32Provider.QuantizeDeltaPure(from, new PointI(99, 37), Cx, Cy, TrueOx, TrueOy, known: true));
+    }
 }

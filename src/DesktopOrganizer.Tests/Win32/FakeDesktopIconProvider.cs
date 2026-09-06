@@ -23,6 +23,15 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
     public PointI GetPosition(int index) => _pos.TryGetValue(index, out var p) ? p : new PointI(0, 0);
     public void SetPosition(int index, PointI position) => _pos[index] = position;
 
+    // Lattice seam: the fake desktop has no grid, so the cursor delta passes through verbatim —
+    // which is also what the real provider does before its first lattice observation. A test can
+    // install this hook to emulate Explorer's quantization and pin the fence-follows-icons
+    // contract (2026-09-06 third drift incident: the fence used the cursor delta while the icons
+    // took the quantized one, so box and icons drifted apart by up to half a cell per gesture).
+    public Func<PointI, PointI, PointI>? QuantizeDeltaHook { get; set; }
+    public PointI QuantizeDelta(PointI from, PointI delta)
+        => QuantizeDeltaHook?.Invoke(from, delta) ?? delta;
+
     // Test control: the fake desktop never has auto-arrange on by default, and "disabling" it is a no-op.
     public bool IsAutoArrangeOn { get; set; }
     // Lets a test simulate auto-arrange that CANNOT be turned off (the real Windows shell sometimes

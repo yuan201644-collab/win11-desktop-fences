@@ -231,4 +231,54 @@ public class FenceDragTests
         }
         Assert.NotNull(f.Controller.GetFenceLayout(BoxA));
     }
+
+    [Fact]
+    public void DragEnded_FenceFollowsTheQuantizedIconDisplacement_NotTheCursor()
+    {
+        // THE 2026-09-06 third-drift-incident contract: with a lattice active, the icons' effective
+        // displacement is the quantized d', NOT the cursor delta — and the fence must move by d'
+        // too, or box and icons drift apart by up to half a cell on every gesture.
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
+        var before = IconsIn(f, BoxA).ToDictionary(ic => ic.Index, ic => ic.Position);
+        // Explorer quantizes (140,90) → (76,82) (one lattice step; sub-step cursor motion vanishes).
+        f.Provider.QuantizeDeltaHook = (_, d) => new PointI(
+            Math.Sign(d.X) * Math.Min(Math.Abs(d.X), 76),
+            Math.Sign(d.Y) * Math.Min(Math.Abs(d.Y), 82));
+        f.Host.RaiseDragStarted(BoxA);
+        f.Host.FenceBoundsOverride = new RectI(440, 440, 420, 300);
+        f.Host.RaiseDragMoved(BoxA, 140, 90);
+        f.Host.RaiseDragEnded(BoxA);
+
+        // Icons moved by the QUANTIZED displacement, rigidly.
+        foreach (var ic in IconsIn(f, BoxA))
+        {
+            Assert.Equal(before[ic.Index].X + 76, ic.Position.X);
+            Assert.Equal(before[ic.Index].Y + 82, ic.Position.Y);
+        }
+        // The fence was pulled from the cursor drop spot (440,440) onto the icons' landing spot.
+        var moved = Assert.Single(f.Host.MovedBounds);
+        Assert.Equal(BoxA, moved.Title);
+        Assert.Equal(new RectI(376, 432, 420, 300), moved.Bounds);
+        // …and THAT rect is what got pinned.
+        Assert.Equal(new FenceLayout(376, 432, 420, 300), f.Controller.GetFenceLayout(BoxA));
+    }
+
+    [Fact]
+    public void DragEnded_WithoutALattice_KeepsTheCursorDropSpot()
+    {
+        // No hook installed → no lattice → the fence stays where the cursor left it (existing
+        // contract), proving the new SetFenceBounds is a no-op when d' equals the cursor delta.
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
+        f.Host.RaiseDragStarted(BoxA);
+        f.Host.FenceBoundsOverride = new RectI(440, 440, 420, 300);
+        f.Host.RaiseDragMoved(BoxA, 140, 90);
+        f.Host.RaiseDragEnded(BoxA);
+
+        Assert.Empty(f.Host.MovedBounds); // live == startRect + d, nothing to correct
+        Assert.Equal(new FenceLayout(440, 440, 420, 300), f.Controller.GetFenceLayout(BoxA));
+    }
 }
