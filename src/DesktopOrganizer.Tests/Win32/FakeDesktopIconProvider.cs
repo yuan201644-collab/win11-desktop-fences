@@ -21,16 +21,14 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
         Icons.Select(ic => new DesktopIcon(ic.Index, ic.Name, ic.Path,
             _pos.TryGetValue(ic.Index, out var p) ? p : ic.Position)).ToList();
     public PointI GetPosition(int index) => _pos.TryGetValue(index, out var p) ? p : new PointI(0, 0);
-    public void SetPosition(int index, PointI position) => _pos[index] = position;
+    public void SetPosition(int index, PointI position) => _pos[index] = SetPositionSnapHook?.Invoke(position) ?? position;
 
-    // Lattice seam: the fake desktop has no grid, so the cursor delta passes through verbatim —
-    // which is also what the real provider does before its first lattice observation. A test can
-    // install this hook to emulate Explorer's quantization and pin the fence-follows-icons
-    // contract (2026-09-06 third drift incident: the fence used the cursor delta while the icons
-    // took the quantized one, so box and icons drifted apart by up to half a cell per gesture).
-    public Func<PointI, PointI, PointI>? QuantizeDeltaHook { get; set; }
-    public PointI QuantizeDelta(PointI from, PointI delta)
-        => QuantizeDeltaHook?.Invoke(from, delta) ?? delta;
+    // Lattice seam: the fake desktop has no grid, so writes store verbatim — which is also what
+    // the real provider does before its first lattice observation. A test can install this hook to
+    // emulate Explorer's quantization on every write, and pin the fence-follows-measured-icons
+    // contract (2026-09-06 third drift incident: the fence must walk the displacement the icons
+    // ACTUALLY took after quantization — precomputing it from one anchor icon diverged the pair).
+    public Func<PointI, PointI>? SetPositionSnapHook { get; set; }
 
     // Test control: the fake desktop never has auto-arrange on by default, and "disabling" it is a no-op.
     public bool IsAutoArrangeOn { get; set; }

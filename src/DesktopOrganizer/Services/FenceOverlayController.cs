@@ -1829,17 +1829,24 @@ public sealed class FenceOverlayController : IDisposable
         int dx = clamped.Left - _dragStartRect.Left;
         int dy = clamped.Top - _dragStartRect.Top;
 
-        // THIRD 2026-09-06 drift incident: with "align to grid" on, the icon writes below are
-        // quantized onto Explorer's lattice, so the icons' EFFECTIVE displacement is not (dx,dy)
-        // but the snapped-through-lattice d'. The fence used to keep the cursor delta while the
-        // icons took d' — box and icons drifted apart by up to half a cell in a fresh random
-        // direction on EVERY gesture. Authority now belongs to the icons: quantize the delta once
-        // (rigid groups share one phase → one displacement, pinned by the UniformPhase tests),
-        // move the icons by it, and put the fence exactly where that displacement lands.
-        var anchor = _dragStart.OrderBy(kv => kv.Key).First().Value;
-        var d2 = _provider.QuantizeDelta(anchor, new PointI(dx, dy));
+        // THIRD 2026-09-06 drift incident, attempt 2 (7957df6 precomputed d' from an anchor icon
+        // and was WRONG: an anchor off-lattice yields a d' whose phase is off too, the per-icon
+        // snap inside SetPosition then re-corrects every write by a different residual while the
+        // fence faithfully walks d' — box vs icons diverged by 24px per gesture, ACCUMULATING).
+        // Final design needs no phase assumptions at all: the icons restore through their ordinary
+        // per-icon lattice snap (writing = snapping, group rigid), then the fence is placed by the
+        // icons' MEASURED displacement — the mode of (readback − start) over the group. The fence
+        // walks exactly the distance the icons actually walked, whatever their phases are.
+        foreach (var (idx, start) in _dragStart)
+            _provider.SetPosition(idx, new PointI(start.X + dx, start.Y + dy));
+
+        // TEMP DIAG: immediate read-back of the restore. If Explorer has not processed the
+        // SetPosition burst yet, GetIcons still reports the pre-drag (parked) spots — exactly the
+        // stale snapshot the 2s tick would consume as "the user moved icons" and re-arrange over.
+        var readback = _provider.GetIcons().ToDictionary(ic => ic.Index, ic => ic.Position);
+        var dActual = MeasureGroupDisplacement(readback);
         var restored = ClampFenceRect(new RectI(
-            _dragStartRect.Left + d2.X, _dragStartRect.Top + d2.Y,
+            _dragStartRect.Left + dActual.X, _dragStartRect.Top + dActual.Y,
             _dragStartRect.Width, _dragStartRect.Height));
 
         // TEMP DIAG: overlap census — if the drop rect crosses other pinned boxes, the restored
@@ -1850,24 +1857,14 @@ public sealed class FenceOverlayController : IDisposable
             restored.Top < kv.Value.Y + kv.Value.Height && kv.Value.Y < restored.Bottom)
             .Select(kv => kv.Key).ToList();
         DragDiag($"END \"{_dragTitle}\" snap={_dragStart.Count} src={(live is null ? "FALLBACK(delta)" : "live")}" +
-                $" final={final} clamped={clamped} d=({dx},{dy}) d2=({d2.X},{d2.Y})" +
-                $" restored={restored} clampFixed={(clamped != final ? "YES" : "no")}" +
+                $" final={final} clamped={clamped} d=({dx},{dy})" +
+                $" clampFixed={(clamped != final ? "YES" : "no")}" +
                 (overlaps.Count > 0 ? $" OVERLAPS=[{string.Join(",", overlaps)}]" : ""));
 
-        // Bring the icons back from their drag-hide: every one is translated by the SAME quantized
-        // displacement from where the gesture started, so the layout the user had reappears intact
-        // and rigid — one burst of SetPosition, once per drag, instead of once per frame.
-        foreach (var (idx, start) in _dragStart)
-            _provider.SetPosition(idx, new PointI(start.X + d2.X, start.Y + d2.Y));
-
-        // TEMP DIAG: immediate read-back of the restore. If Explorer has not processed the
-        // SetPosition burst yet, GetIcons still reports the pre-drag (parked) spots — exactly the
-        // stale snapshot the 2s tick would consume as "the user moved icons" and re-arrange over.
-        var readback = _provider.GetIcons().ToDictionary(ic => ic.Index, ic => ic.Position);
         int mismatch = 0; var sample = new System.Text.StringBuilder();
         foreach (var (idx, start) in _dragStart)
         {
-            var want = new PointI(start.X + d2.X, start.Y + d2.Y);
+            var want = new PointI(start.X + dx, start.Y + dy);
             var got = readback.TryGetValue(idx, out var g) ? g : new PointI(-99999, -99999);
             if (Math.Abs(got.X - want.X) > 1 || Math.Abs(got.Y - want.Y) > 1)
             {
@@ -1876,13 +1873,15 @@ public sealed class FenceOverlayController : IDisposable
                     sample.Append($" i{idx} want({want.X},{want.Y}) got({got.X},{got.Y});");
             }
         }
-        DragDiag($"READBACK \"{_dragTitle}\" mismatches={mismatch}/{_dragStart.Count}{(mismatch > 0 ? " " + sample : "")}");
+        DragDiag($"READBACK \"{_dragTitle}\" mismatches={mismatch}/{_dragStart.Count}" +
+                $" dActual=({dActual.X},{dActual.Y}) restored={restored}" +
+                $"{(mismatch > 0 ? " " + sample : "")}");
 
         _dragStart = new Dictionary<int, PointI>();
 
-        // The window follows the ICONS' displacement, not the cursor's: put it exactly where the
-        // quantized restore lands (no-op when the host already sits there). This keeps the box-to-
-        // icons offset constant across gestures instead of re-randomizing it by up to half a cell.
+        // The window follows the ICONS' measured displacement, not the cursor's (no-op when the
+        // host already sits there): the box-to-icons offset is carried over the gesture verbatim
+        // instead of being re-randomized by the lattice on every drag.
         if (live is null || live.Value != restored)
             _host.SetFenceBounds(_dragTitle, restored);
 
@@ -1890,7 +1889,7 @@ public sealed class FenceOverlayController : IDisposable
         // it back into the crowd. A bare click (no movement — possible now that the park starts at
         // press time) restores the icons untouched and must NOT newly pin an unpinned box: clicking
         // a title is not a layout decision. An already-pinned box just re-pins the same rect.
-        if (d2.X != 0 || d2.Y != 0 || _fenceLayouts.ContainsKey(title))
+        if (dActual.X != 0 || dActual.Y != 0 || _fenceLayouts.ContainsKey(title))
         {
             PinBox(title, restored);
             SaveLayout();
@@ -1898,6 +1897,28 @@ public sealed class FenceOverlayController : IDisposable
         // Record the post-drag positions so the 2s tick sees no change and leaves every box alone.
         _lastIcons = IconPositions(_provider.GetIcons());
     }
+
+    /// <summary>The displacement the restored group actually took: the mode of (readback − start)
+    /// over the parked icons. All members share one lattice phase, so one displacement wins the
+    /// vote; members that could not be read back are skipped rather than counted as zero-move.
+    /// Pure over its inputs — unit-testable without a desktop.</summary>
+    internal static PointI MeasureGroupDisplacement(IReadOnlyDictionary<int, PointI> readback, IReadOnlyDictionary<int, PointI> starts)
+    {
+        var votes = new Dictionary<PointI, int>();
+        foreach (var (idx, start) in starts)
+        {
+            if (!readback.TryGetValue(idx, out var got)) continue;
+            var d = new PointI(got.X - start.X, got.Y - start.Y);
+            votes[d] = votes.GetValueOrDefault(d) + 1;
+        }
+        var best = new PointI(0, 0); var bestCount = -1;
+        foreach (var kv in votes)
+            if (kv.Value > bestCount) { best = kv.Key; bestCount = kv.Value; }
+        return best;
+    }
+
+    private PointI MeasureGroupDisplacement(IReadOnlyDictionary<int, PointI> readback)
+        => MeasureGroupDisplacement(readback, _dragStart);
 
     /// <summary>The box rectangle the icons currently imply (insets + header included), or null when
     /// the box has no icons. Shared by the drag-start fallback and <see cref="PinCurrentBox"/>.</summary>

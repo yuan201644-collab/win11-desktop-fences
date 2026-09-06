@@ -233,43 +233,84 @@ public class FenceDragTests
     }
 
     [Fact]
-    public void DragEnded_FenceFollowsTheQuantizedIconDisplacement_NotTheCursor()
+    public void DragEnded_FenceFollowsTheIconsActualLatticeDisplacement()
     {
-        // THE 2026-09-06 third-drift-incident contract: with a lattice active, the icons' effective
-        // displacement is the quantized d', NOT the cursor delta — and the fence must move by d'
-        // too, or box and icons drift apart by up to half a cell on every gesture.
+        // THE 2026-09-06 third-drift-incident contract: the icons' writes are quantized by the
+        // lattice, so their EFFECTIVE displacement differs from the cursor delta — and the fence
+        // must walk the icons' MEASURED displacement, or box and icons drift (attempt 2, which
+        // precomputed the quantized delta from one anchor icon, diverged the pair by 24px per
+        // gesture, ACCUMULATING, because the anchor sat off-lattice).
         var f = Build();
         f.Controller.ArrangeAndShow();
         f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
-        var before = IconsIn(f, BoxA).ToDictionary(ic => ic.Index, ic => ic.Position);
-        // Explorer quantizes (140,90) → (76,82) (one lattice step; sub-step cursor motion vanishes).
-        f.Provider.QuantizeDeltaHook = (_, d) => new PointI(
-            Math.Sign(d.X) * Math.Min(Math.Abs(d.X), 76),
-            Math.Sign(d.Y) * Math.Min(Math.Abs(d.Y), 82));
+        // Simulate Explorer's lattice: phase (22,2), pitch 76×82 — every write snaps onto it.
+        f.Provider.SetPositionSnapHook = p => new PointI(
+            22 + 76 * (int)Math.Floor((p.X - 22) / 76.0 + 0.5),
+            2 + 82 * (int)Math.Floor((p.Y - 2) / 82.0 + 0.5));
+        // Park the group members on one lattice column so their phase is shared and the measured
+        // displacement is unambiguous.
+        var members = IconsIn(f, BoxA).Select(ic => ic.Index).OrderBy(i => i).ToList();
+        for (var k = 0; k < members.Count; k++)
+            f.Provider.SetPosition(members[k], new PointI(98 + 76 * k, 84));
+        var before = members.ToDictionary(i => i, i => f.Provider.GetPosition(i));
+
         f.Host.RaiseDragStarted(BoxA);
         f.Host.FenceBoundsOverride = new RectI(440, 440, 420, 300);
         f.Host.RaiseDragMoved(BoxA, 140, 90);
         f.Host.RaiseDragEnded(BoxA);
 
-        // Icons moved by the QUANTIZED displacement, rigidly.
-        foreach (var ic in IconsIn(f, BoxA))
+        // Every member lands exactly TWO pitches right and one pitch down (140 → 2×76)...
+        foreach (var i in members)
         {
-            Assert.Equal(before[ic.Index].X + 76, ic.Position.X);
-            Assert.Equal(before[ic.Index].Y + 82, ic.Position.Y);
+            Assert.Equal(before[i].X + 152, f.Provider.GetPosition(i).X);
+            Assert.Equal(before[i].Y + 82, f.Provider.GetPosition(i).Y);
         }
-        // The fence was pulled from the cursor drop spot (440,440) onto the icons' landing spot.
+        // ...and the fence was pulled from the cursor drop spot onto where they ACTUALLY landed.
         var moved = Assert.Single(f.Host.MovedBounds);
         Assert.Equal(BoxA, moved.Title);
-        Assert.Equal(new RectI(376, 432, 420, 300), moved.Bounds);
-        // …and THAT rect is what got pinned.
-        Assert.Equal(new FenceLayout(376, 432, 420, 300), f.Controller.GetFenceLayout(BoxA));
+        Assert.Equal(new RectI(300 + 152, 350 + 82, 420, 300), moved.Bounds);
+        Assert.Equal(new FenceLayout(452, 432, 420, 300), f.Controller.GetFenceLayout(BoxA));
+    }
+
+    [Fact]
+    public void DragEnded_BoxIconOffsetDoesNotAccumulateAcrossGestures()
+    {
+        // The killer symptom of the d2 attempt: each gesture re-randomized (here: grew) the
+        // box-to-icons offset. Pin it: after ANY two gestures the offset must be identical.
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Provider.SetPositionSnapHook = p => new PointI(
+            22 + 76 * (int)Math.Floor((p.X - 22) / 76.0 + 0.5),
+            2 + 82 * (int)Math.Floor((p.Y - 2) / 82.0 + 0.5));
+        var members = IconsIn(f, BoxA).Select(ic => ic.Index).OrderBy(i => i).ToList();
+        for (var k = 0; k < members.Count; k++)
+            f.Provider.SetPosition(members[k], new PointI(98 + 76 * k, 84));
+
+        int OffsetAfter(int dx, int dy)
+        {
+            var cur = f.Controller.GetFenceLayout(BoxA);
+            f.Host.FenceBoundsOverride = new RectI(cur?.X ?? 300, cur?.Y ?? 350, 420, 300);
+            f.Host.RaiseDragStarted(BoxA);
+            f.Host.FenceBoundsOverride = new RectI((cur?.X ?? 300) + dx, (cur?.Y ?? 350) + dy, 420, 300);
+            f.Host.RaiseDragMoved(BoxA, dx, dy);
+            f.Host.RaiseDragEnded(BoxA);
+            var layout = f.Controller.GetFenceLayout(BoxA)!;
+            var icon = f.Provider.GetPosition(members[0]);
+            return icon.X - layout.X;
+        }
+
+        var offset1 = OffsetAfter(140, 90);
+        var offset2 = OffsetAfter(-53, 40);
+        var offset3 = OffsetAfter(38, -39);
+        Assert.Equal(offset1, offset2);
+        Assert.Equal(offset2, offset3);
     }
 
     [Fact]
     public void DragEnded_WithoutALattice_KeepsTheCursorDropSpot()
     {
-        // No hook installed → no lattice → the fence stays where the cursor left it (existing
-        // contract), proving the new SetFenceBounds is a no-op when d' equals the cursor delta.
+        // No snap hook installed → no lattice → icons take the cursor delta verbatim, the measured
+        // displacement equals it, and the fence stays where the cursor left it (existing contract).
         var f = Build();
         f.Controller.ArrangeAndShow();
         f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
@@ -278,7 +319,7 @@ public class FenceDragTests
         f.Host.RaiseDragMoved(BoxA, 140, 90);
         f.Host.RaiseDragEnded(BoxA);
 
-        Assert.Empty(f.Host.MovedBounds); // live == startRect + d, nothing to correct
+        Assert.Empty(f.Host.MovedBounds); // live == startRect + measured d, nothing to correct
         Assert.Equal(new FenceLayout(440, 440, 420, 300), f.Controller.GetFenceLayout(BoxA));
     }
 }

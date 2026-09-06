@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using DesktopOrganizer.Core.Layout;
+using DesktopOrganizer.Services;
 using DesktopOrganizer.Win32;
 using Xunit;
 
@@ -216,31 +217,53 @@ public sealed class LatticePhaseTests
     }
 
     [Fact]
-    public void QuantizeDelta_UnknownLattice_PassesThrough()
+    public void MeasureGroupDisplacement_ModeOfMeasuredDeltas()
     {
-        var delta = new PointI(140, 90);
-        Assert.Equal(delta, SysListView32Provider.QuantizeDeltaPure(new PointI(98, 84), delta, Cx, Cy, TrueOx, TrueOy, known: false));
+        // The fence-follows-icons contract (2026-09-06 third drift incident): the controller moves
+        // the fence by the group's MEASURED displacement — the mode of (readback − start). No phase
+        // assumptions, no precomputation from a single anchor (that diverged the pair by 24px per
+        // gesture, accumulating).
+        var starts = new Dictionary<int, PointI>
+        {
+            [71] = new(98, 84), [72] = new(174, 84), [73] = new(250, 84),
+        };
+        // After the per-icon lattice snap all three members read back exactly one pitch right of
+        // their start — one shared displacement wins the vote.
+        var readback = new Dictionary<int, PointI>
+        {
+            [71] = new(174, 166), [72] = new(250, 166), [73] = new(326, 166),
+        };
+
+        var d = FenceOverlayController.MeasureGroupDisplacement(readback, starts);
+        Assert.Equal(new PointI(76, 82), d);
     }
 
     [Fact]
-    public void QuantizeDelta_SnapsTheDestinationThroughTheLattice()
+    public void MeasureGroupDisplacement_OutlierDoesNotWinTheVote()
     {
-        // From a lattice point (98,84), a (20,246) cursor delta lands at (118,330); the lattice
-        // quantizes it to (98,330) — the horizontal 20px is swallowed by the 76px pitch. This is
-        // exactly gesture 21:27:48 from drag-diag.log (want(954,250) → got(934,248) on the
-        // (934,2)-anchored group).
-        var d2 = SysListView32Provider.QuantizeDeltaPure(new PointI(98, 84), new PointI(20, 246), Cx, Cy, TrueOx, TrueOy, known: true);
-        Assert.Equal(new PointI(0, 246), d2);
+        var starts = new Dictionary<int, PointI>
+        {
+            [1] = new(98, 84), [2] = new(174, 84), [3] = new(250, 84), [4] = new(326, 84),
+        };
+        // Three members moved one pitch; one (index-shift artifact) reports a different delta.
+        var readback = new Dictionary<int, PointI>
+        {
+            [1] = new(174, 84), [2] = new(250, 84), [3] = new(326, 84), [4] = new(402, 2),
+        };
+
+        var d = FenceOverlayController.MeasureGroupDisplacement(readback, starts);
+        Assert.Equal(new PointI(76, 0), d);
     }
 
     [Fact]
-    public void QuantizeDelta_IsIdenticalForEveryGroupMember()
+    public void MeasureGroupDisplacement_UnreadableMembersAreSkipped()
     {
-        // THE fence-follows-icons precondition: all group members sit on the lattice, so one
-        // quantized displacement is valid for the whole rigid body.
-        var froms = new[] { new PointI(98, 84), new PointI(250, 166), new PointI(402, 330) };
-        var first = SysListView32Provider.QuantizeDeltaPure(froms[0], new PointI(99, 37), Cx, Cy, TrueOx, TrueOy, known: true);
-        foreach (var from in froms.Skip(1))
-            Assert.Equal(first, SysListView32Provider.QuantizeDeltaPure(from, new PointI(99, 37), Cx, Cy, TrueOx, TrueOy, known: true));
+        // Icons still parked (no readback entry) must not count as zero-move votes.
+        var starts = new Dictionary<int, PointI> { [1] = new(98, 84), [2] = new(174, 84) };
+        var readback = new Dictionary<int, PointI> { [1] = new(174, 166) };
+
+        var d = FenceOverlayController.MeasureGroupDisplacement(readback, starts);
+        Assert.Equal(new PointI(76, 82), d);
+        Assert.Equal(new PointI(0, 0), FenceOverlayController.MeasureGroupDisplacement(new Dictionary<int, PointI>(), starts));
     }
 }
