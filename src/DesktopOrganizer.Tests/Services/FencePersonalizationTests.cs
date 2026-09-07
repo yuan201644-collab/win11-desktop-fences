@@ -93,6 +93,43 @@ public class FencePersonalizationTests
         => BoxGrouping.FromEntry(new SoftwareGroupingConfig(), ic.Name, ic.Path, null).Title;
 
     [Fact]
+    public void ToggleFencePin_PinnedBox_UnpinsItAndRepacks()
+    {
+        // The badge used to be a read-only state light. Toggling a pinned box must forget its
+        // rectangle — ClearFenceLayout refreshes, so the box re-packs with the others right away.
+        var f = Build();
+        f.Controller.ArrangeAndShow(); // membership first: a box the user can click must be rendered
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
+        Assert.NotNull(f.Controller.GetFenceLayout(BoxA));
+
+        f.Host.RaisePinToggled(BoxA);
+
+        Assert.Null(f.Controller.GetFenceLayout(BoxA));
+    }
+
+    [Fact]
+    public void ToggleFencePin_UnpinnedBox_PinsToItsCurrentRectangleWithoutMovingAnything()
+    {
+        // Toggling an auto-packing box pins it exactly where it stands: no icon re-layout (the icons
+        // are already inside that rectangle) and no refresh (a refresh would shuffle every OTHER
+        // auto-packing box for a decision that concerns only this one). Only the badge repaints.
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        Assert.Null(f.Controller.GetFenceLayout(BoxA)); // fixture sanity: starts unpinned
+        f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
+
+        f.Host.RaisePinToggled(BoxA);
+
+        Assert.Equal(new FenceLayout(300, 350, 420, 300), f.Controller.GetFenceLayout(BoxA));
+        Assert.Equal((BoxA, true), Assert.Single(f.Host.PinnedToggles));
+        Assert.Empty(f.Host.MovedBounds); // nothing was pushed anywhere
+
+        // And back: a second click unpins it again (a real toggle, not a one-way switch).
+        f.Host.RaisePinToggled(BoxA);
+        Assert.Null(f.Controller.GetFenceLayout(BoxA));
+    }
+
+    [Fact]
     public void SetFenceLayout_RelaysOutOnlyThePinnedBox()
     {
         var f = Build();

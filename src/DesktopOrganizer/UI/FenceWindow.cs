@@ -66,6 +66,10 @@ public sealed class FenceWindow : Window
     /// <summary>Raises when the header is double-clicked — the controller flips this box's collapsed state.</summary>
     public event Action<string>? TitleToggleCollapse;
 
+    /// <summary>Raises when the pin badge is clicked — the controller flips this box's pinned state
+    /// (a pinned box keeps its rectangle across arranges instead of auto-packing).</summary>
+    public event Action<string>? TitleTogglePin;
+
     /// <summary>Raises when the header (incl. the collapsed tab) is right-clicked — the controller
     /// opens a context menu of extra actions at the cursor. Carries the screen-pixel cursor location.</summary>
     public event Action<string, int, int>? ContextMenuRequested;
@@ -117,17 +121,17 @@ public sealed class FenceWindow : Window
             Margin = new Thickness(12, 0, 4, 0),
         };
         Grid.SetColumn(_title, 0);
-        // Pinned-position badge: a small pin shown only while this box is pinned, so "why doesn't
-        // this box re-pack with the others" is answerable at a glance.
+        // Pinned-position badge: a small pin shown on EVERY box — faded when it auto-packs, solid
+        // when it is pinned. It is a TOGGLE (clicking it pins/unpins), not just a state light.
         _pinGlyph = new TextBlock
         {
             Text = "📌",
             FontSize = 10,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 4, 0),
-            Visibility = Visibility.Collapsed,
-            ToolTip = "已固定位置：整理/刷新时保持此框的位置与大小。右键标题可取消固定。",
+            Cursor = Cursors.Hand,
         };
+        _pinGlyph.MouseLeftButtonDown += OnPinClicked;
         Grid.SetColumn(_pinGlyph, 1);
         _toggleGlyph = new TextBlock
         {
@@ -258,7 +262,11 @@ public sealed class FenceWindow : Window
 
         // Glyph mirrors the state so the tab itself stays discoverable: ▾ = can collapse, ▸ = can expand.
         _toggleGlyph.Text = collapsed ? "▸" : "▾";
-        _pinGlyph.Visibility = pinned ? Visibility.Visible : Visibility.Collapsed;
+        // The pin is always visible (it is a toggle): solid = pinned, faded = auto-packs.
+        _pinGlyph.Opacity = pinned ? 1.0 : UnpinnedPinOpacity;
+        _pinGlyph.ToolTip = pinned
+            ? "已固定位置：整理/刷新时保持此框的位置与大小。点击取消固定。"
+            : "未固定位置：整理/刷新时会自动排列。点击固定到当前位置。";
 
         // Collapsed: hide the box body and keep just the header (title) spanning the tab width.
         if (collapsed)
@@ -406,6 +414,18 @@ public sealed class FenceWindow : Window
         e.Handled = true; // swallow the click so the window-level handler doesn't arm a drag
         TitleToggleCollapse?.Invoke(ClusterTitle);
     }
+
+    /// <summary>The pin badge is a TOGGLE. It sits on the header (the drag grab strip), so the click
+    /// must be swallowed — otherwise pinning would also arm a drag and move the box.</summary>
+    private void OnPinClicked(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        TitleTogglePin?.Invoke(ClusterTitle);
+    }
+
+    /// <summary>Faded opacity of the pin badge on an auto-packing (unpinned) box: still visible
+    /// enough to be clickable, quiet enough not to compete with the solid "pinned" state.</summary>
+    private const double UnpinnedPinOpacity = 0.35;
 
     /// <summary>
     /// Right-click on the header opens the per-fence context menu. Only the header is hittable (the

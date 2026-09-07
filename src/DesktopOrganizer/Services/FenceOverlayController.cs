@@ -183,6 +183,7 @@ public sealed class FenceOverlayController : IDisposable
         _host.ResizeMoved += OnResizeMoved;
         _host.ResizeEnded += OnResizeEnded;
         _host.CollapseToggled += OnCollapseToggled;
+        _host.PinToggled += OnPinToggled;
         _host.ContextMenuRequested += (t, x, y) => FenceContextMenu?.Invoke(t, x, y);
 
         // Restore the persisted collapsed state. Records from the legacy (plain string array)
@@ -775,6 +776,30 @@ public sealed class FenceOverlayController : IDisposable
         }
         PersistCollapsed();
         ForceRefresh();
+    }
+
+    /// <summary>Flips a box between "keeps this rectangle" and "auto-packs with the rest" — the
+    /// action behind the header's pin badge (which is a TOGGLE, not just a state light).</summary>
+    public void ToggleFencePin(string title) => OnPinToggled(title);
+
+    private void OnPinToggled(string title)
+    {
+        if (!_membership.ContainsKey(title)) return;
+        if (_fenceLayouts.ContainsKey(title))
+        {
+            // Already pinned → forget its rectangle and let it re-pack with the others immediately
+            // (ClearFenceLayout persists and refreshes).
+            ClearFenceLayout(title);
+            return;
+        }
+        // Not pinned → pin it exactly where it is NOW. Nothing moves: no icon re-layout (the box is
+        // already there, its icons are already inside it) and no refresh (that would yank every
+        // OTHER auto-packing box around, and pinning one box is not a layout decision about them).
+        // Only the badge is repainted, so the click reads as "locked" instead of "rearranged".
+        var rect = _host.GetFenceBounds(title) ?? IconBoxRect(title);
+        if (rect is null || rect.Value.Width <= 0 || rect.Value.Height <= 0) return;
+        PinBox(title, rect.Value);
+        _host.SetFencePinned(title, true);
     }
 
     /// <summary>Public entry used by the right-click menu: flip one fence's collapsed state.</summary>

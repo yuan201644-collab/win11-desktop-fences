@@ -26,6 +26,9 @@ public sealed class FenceHost : IOverlayHost
     /// <summary>Raised when a fence's header is double-clicked — flip its collapsed state.</summary>
     public event Action<string>? CollapseToggled;
 
+    /// <summary>Raised when a fence's pin badge is clicked — flip its pinned state.</summary>
+    public event Action<string>? PinToggled;
+
     /// <summary>Raised when a fence's header (incl. collapsed tab) is right-clicked — show its context menu.</summary>
     public event Action<string, int, int>? ContextMenuRequested;
 
@@ -159,6 +162,16 @@ public sealed class FenceHost : IOverlayHost
         _preview.ShowAt(bounds.Value);
     }
 
+    /// <summary>Repaints one fence's pin badge (solid vs faded) WITHOUT moving the box: pinning is
+    /// a promise about the next arrange, not a layout change — a full re-sync here would shuffle
+    /// every other auto-packing box under the user's cursor.</summary>
+    public void SetFencePinned(string title, bool pinned)
+    {
+        if (pinned) _pinnedTitles.Add(title);
+        else _pinnedTitles.Remove(title);
+        if (GetFenceBounds(title) is { } b) SetFenceBounds(title, b); // redraws with the new badge
+    }
+
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
     /// this box (no window yet, or it was never shown so WPF hasn't assigned geometry).</summary>
     public RectI? GetFenceBounds(string title)
@@ -198,6 +211,7 @@ public sealed class FenceHost : IOverlayHost
         win.ClusterDrag += (t, dx, dy) => DragMoved?.Invoke(t, dx, dy);
         win.ClusterDragEnd += (t) => DragEnded?.Invoke(t);
         win.TitleToggleCollapse += (t) => CollapseToggled?.Invoke(t);
+        win.TitleTogglePin += (t) => PinToggled?.Invoke(t);
         win.ContextMenuRequested += (t, x, y) => ContextMenuRequested?.Invoke(t, x, y);
         win.ResizeStarted += (t) => ResizeStarted?.Invoke(t);
         win.ResizeMoved += (t, r) => ResizeMoved?.Invoke(t, r);

@@ -15,6 +15,10 @@ public interface IOverlayHost
     /// <summary>Raised when a fence's header is double-clicked — flip its collapsed state.</summary>
     event Action<string>? CollapseToggled;
 
+    /// <summary>Raised when a fence's pin badge is clicked — flip its pinned state (pinned boxes
+    /// keep their rectangle across arranges instead of auto-packing).</summary>
+    event Action<string>? PinToggled;
+
     /// <summary>Raised when a fence's header (incl. collapsed tab) is right-clicked — show its context menu.</summary>
     event Action<string, int, int>? ContextMenuRequested;
 
@@ -60,6 +64,10 @@ public interface IOverlayHost
     /// dragged box will magnetically land on if released NOW (null hides it). Pure UI feedback:
     /// the release itself still trusts the icons' measured displacement, not this prediction.</summary>
     void SetFencePreview(string title, RectI? bounds);
+
+    /// <summary>Repaints one fence's pin badge (solid vs faded) without moving it. The badge is a
+    /// toggle, so pinning/unpinning must update it live without disturbing the layout.</summary>
+    void SetFencePinned(string title, bool pinned);
 
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
     /// this box (window absent or not laid out). The settings layout editor uses this as the X/Y

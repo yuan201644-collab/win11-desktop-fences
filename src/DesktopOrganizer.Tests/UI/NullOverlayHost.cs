@@ -21,6 +21,7 @@ public sealed class NullOverlayHost : IOverlayHost
     private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
 
     public event Action<string>? CollapseToggled;
+    public event Action<string>? PinToggled;
     public event Action<string, int, int>? ContextMenuRequested;
     public event Action<string>? DragStarted;
     public event Action<string, int, int>? DragMoved;
@@ -74,10 +75,20 @@ public sealed class NullOverlayHost : IOverlayHost
 
     public void SetFencePreview(string title, RectI? bounds) => LastPreviewBounds = bounds;
 
+    /// <summary>Every pin-badge repaint the controller asked for (title → pinned), newest last.
+    /// The badge is a toggle, so pinning/unpinning must repaint it without moving the box.</summary>
+    public List<(string Title, bool Pinned)> PinnedToggles { get; } = new();
+
+    public void SetFencePinned(string title, bool pinned) => PinnedToggles.Add((title, pinned));
+
     // Test-side triggers for the drag gesture (a real FenceWindow raises these from mouse events).
     public void RaiseDragStarted(string title) => DragStarted?.Invoke(title);
     public void RaiseDragMoved(string title, int dx, int dy) => DragMoved?.Invoke(title, dx, dy);
     public void RaiseDragEnded(string title) => DragEnded?.Invoke(title);
+
+    /// <summary>Test-side trigger for the pin badge click (a real FenceWindow raises this from the
+    /// badge's mouse-down).</summary>
+    public void RaisePinToggled(string title) => PinToggled?.Invoke(title);
 
     /// <summary>Test-side trigger for the resize gesture (a real FenceWindow raises this from the
     /// edge-grab mouse-down).</summary>
