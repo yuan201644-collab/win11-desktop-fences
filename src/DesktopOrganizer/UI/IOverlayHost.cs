@@ -56,6 +56,11 @@ public interface IOverlayHost
     /// box eases onto the icons' lattice spot instead of teleporting there.</summary>
     void SetFenceBoundsAnimated(string title, RectI bounds, int glideMilliseconds);
 
+    /// <summary>Shows / moves / hides the drag snap preview — a dashed ghost drawn at the spot the
+    /// dragged box will magnetically land on if released NOW (null hides it). Pure UI feedback:
+    /// the release itself still trusts the icons' measured displacement, not this prediction.</summary>
+    void SetFencePreview(string title, RectI? bounds);
+
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
     /// this box (window absent or not laid out). The settings layout editor uses this as the X/Y
     /// anchor for a box that auto-packs, so typing a width/height pins it in place.</summary>

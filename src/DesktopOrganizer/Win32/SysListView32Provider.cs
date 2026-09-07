@@ -269,6 +269,27 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         return new PointI(originX + kx * cellCx, originY + ky * cellCy);
     }
 
+    /// <summary>The displacement a whole group takes when told to move by <paramref name="d"/>:
+    /// for any start point P already on the lattice, snap(P + d) − P is exactly this — the phase
+    /// cancels out (floor(k + x) = k + floor(x) for integer k). The drag snap preview uses it to
+    /// show the drop spot before release; the release itself still trusts the icons' MEASURED
+    /// displacement (the preview is a prediction, the readback is the authority). Same half-up
+    /// rounding contract as <see cref="SnapToLattice"/>.</summary>
+    internal static PointI SnapDeltaToLattice(PointI d, int cellCx, int cellCy)
+    {
+        if (cellCx <= 0 || cellCy <= 0) return d; // unusable pitch — identity, never invent one
+        return new PointI(
+            cellCx * (int)Math.Floor(d.X / (double)cellCx + 0.5),
+            cellCy * (int)Math.Floor(d.Y / (double)cellCy + 0.5));
+    }
+
+    public bool TryGetLatticeCell(out int cellCx, out int cellCy)
+    {
+        cellCx = _gridCx;
+        cellCy = _gridCy;
+        return _gridKnown && cellCx > 0 && cellCy > 0;
+    }
+
     private void RefreshGridSpacing()
     {
         try

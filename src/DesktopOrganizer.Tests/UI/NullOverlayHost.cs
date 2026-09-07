@@ -68,6 +68,12 @@ public sealed class NullOverlayHost : IOverlayHost
         MovedBoundsAnimated.Add((title, bounds, glideMilliseconds));
     }
 
+    /// <summary>The drag snap preview the controller last asked for (null = hidden). Tests assert
+    /// the previewed drop spot against the lattice math and that release clears it.</summary>
+    public RectI? LastPreviewBounds { get; private set; }
+
+    public void SetFencePreview(string title, RectI? bounds) => LastPreviewBounds = bounds;
+
     // Test-side triggers for the drag gesture (a real FenceWindow raises these from mouse events).
     public void RaiseDragStarted(string title) => DragStarted?.Invoke(title);
     public void RaiseDragMoved(string title, int dx, int dy) => DragMoved?.Invoke(title, dx, dy);

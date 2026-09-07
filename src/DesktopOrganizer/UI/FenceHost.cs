@@ -143,6 +143,22 @@ public sealed class FenceHost : IOverlayHost
             IsCollapsed(title), _pinnedTitles.Contains(title), glideMilliseconds);
     }
 
+    // The drag snap preview: one lazily created ghost window shared by all fences (only one drag
+    // gesture can be in flight at a time).
+    private SnapPreviewWindow? _preview;
+
+    /// <summary>Shows/moves the dashed drop-spot ghost (bounds non-null) or hides it (null).</summary>
+    public void SetFencePreview(string title, RectI? bounds)
+    {
+        if (bounds is null)
+        {
+            _preview?.Hide();
+            return;
+        }
+        if (_preview is null) _preview = new SnapPreviewWindow(EffectiveAppearance(title));
+        _preview.ShowAt(bounds.Value);
+    }
+
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
     /// this box (no window yet, or it was never shown so WPF hasn't assigned geometry).</summary>
     public RectI? GetFenceBounds(string title)
@@ -167,6 +183,8 @@ public sealed class FenceHost : IOverlayHost
     /// <summary>Clears the pool entirely (on large re-allocations). Kept for symmetry / future use.</summary>
     public void Dispose()
     {
+        _preview?.Close();
+        _preview = null;
         foreach (var f in _fences.Values) f.Close();
         _fences.Clear();
     }

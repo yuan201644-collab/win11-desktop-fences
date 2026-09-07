@@ -1789,6 +1789,7 @@ public sealed class FenceOverlayController : IDisposable
 
     private void OnDragStarted(string title)
     {
+        _host.SetFencePreview(title, null); // never carry a stale ghost into a new gesture
         if (!_membership.ContainsKey(title)) return;
         _dragging = true;
         _dragTitle = title;
@@ -1812,11 +1813,35 @@ public sealed class FenceOverlayController : IDisposable
         // fallback drop spot for hosts that cannot report live geometry on release (headless tests).
         _lastDeltaX = dx;
         _lastDeltaY = dy;
+
+        // Snap preview: show where the box will magnetically land if released NOW. Same clamp +
+        // lattice math as the release path, so the ghost is exactly where the glide will end.
+        _host.SetFencePreview(title, ComputeSnapDropRect(dx, dy));
+    }
+
+    /// <summary>Where the dragged box will land if released with the given cumulative cursor delta:
+    /// clamp the drop rect to the screen (exactly what release does), quantize the resulting delta
+    /// to the icon lattice (what Explorer will do to every restored icon), re-clamp. Null when the
+    /// lattice pitch is unknown — no ghost rather than a wrong ghost. A prediction only: release
+    /// still trusts the icons' MEASURED displacement (fd794cf), this just previews it.</summary>
+    internal RectI? ComputeSnapDropRect(int dx, int dy)
+    {
+        if (!_provider.TryGetLatticeCell(out var cellCx, out var cellCy)) return null;
+        var clamped = ClampFenceRect(new RectI(
+            _dragStartRect.Left + dx, _dragStartRect.Top + dy,
+            _dragStartRect.Width, _dragStartRect.Height));
+        var d = SysListView32Provider.SnapDeltaToLattice(
+            new PointI(clamped.Left - _dragStartRect.Left, clamped.Top - _dragStartRect.Top),
+            cellCx, cellCy);
+        return ClampFenceRect(new RectI(
+            _dragStartRect.Left + d.X, _dragStartRect.Top + d.Y,
+            _dragStartRect.Width, _dragStartRect.Height));
     }
 
     private void OnDragEnded(string title)
     {
         _dragging = false;
+        _host.SetFencePreview(_dragTitle, null); // the ghost's promise is about to come true
         if (_dragStart.Count == 0) return;
 
         // Where the user dropped the box: the live window rect (it moved itself during the drag),

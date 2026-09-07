@@ -358,4 +358,57 @@ public class FenceDragTests
         Assert.Single(f.Host.MovedBounds); // the instant live-tracking write happened...
         Assert.Empty(f.Host.MovedBoundsAnimated); // ...and nothing was animated
     }
+
+    [Fact]
+    public void DragMoved_ShowsTheSnapPreviewAtTheLatticeDropSpot()
+    {
+        // While the box follows the hand, a dashed ghost shows where release would magnetically
+        // land it: the clamped drop delta quantized to the icon lattice — the exact math the
+        // release path applies, so the ghost sits where the glide will end.
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Provider.FakeGridCx = 76;
+        f.Provider.FakeGridCy = 82;
+        f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
+        f.Host.RaiseDragStarted(BoxA);
+
+        f.Host.RaiseDragMoved(BoxA, 100, 90);
+        Assert.Equal(new RectI(300 + 76, 350 + 82, 420, 300), f.Host.LastPreviewBounds);
+
+        // A bigger delta jumps whole pitches — the ghost moves in lattice steps, never to an
+        // arbitrary in-between spot (that is the entire point of the preview).
+        f.Host.RaiseDragMoved(BoxA, 200, 170);
+        Assert.Equal(new RectI(300 + 228, 350 + 164, 420, 300), f.Host.LastPreviewBounds);
+    }
+
+    [Fact]
+    public void DragMoved_WithoutALattice_ShowsNoPreview()
+    {
+        // No grid pitch known → the drop spot cannot be predicted → no ghost at all
+        // (a wrong ghost is worse than none).
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
+        f.Host.RaiseDragStarted(BoxA);
+        f.Host.RaiseDragMoved(BoxA, 140, 90);
+
+        Assert.Null(f.Host.LastPreviewBounds);
+    }
+
+    [Fact]
+    public void DragEnded_ClearsTheSnapPreview()
+    {
+        // The ghost is a pre-release promise; once the gesture ends the real box takes over.
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Provider.FakeGridCx = 76;
+        f.Provider.FakeGridCy = 82;
+        f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
+        f.Host.RaiseDragStarted(BoxA);
+        f.Host.RaiseDragMoved(BoxA, 100, 90);
+        Assert.NotNull(f.Host.LastPreviewBounds);
+
+        f.Host.RaiseDragEnded(BoxA);
+        Assert.Null(f.Host.LastPreviewBounds);
+    }
 }

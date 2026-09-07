@@ -30,6 +30,18 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
     // ACTUALLY took after quantization — precomputing it from one anchor icon diverged the pair).
     public Func<PointI, PointI>? SetPositionSnapHook { get; set; }
 
+    // Grid pitch the fake reports to the controller's snap preview (0,0 = lattice unknown → no
+    // preview, mirroring the real provider before its first observation). Setting e.g. (76,82)
+    // lets a test assert the preview lands on a whole-pitch displacement of the drag start.
+    public int FakeGridCx { get; set; }
+    public int FakeGridCy { get; set; }
+    public bool TryGetLatticeCell(out int cellCx, out int cellCy)
+    {
+        cellCx = FakeGridCx;
+        cellCy = FakeGridCy;
+        return cellCx > 0 && cellCy > 0;
+    }
+
     // Test control: the fake desktop never has auto-arrange on by default, and "disabling" it is a no-op.
     public bool IsAutoArrangeOn { get; set; }
     // Lets a test simulate auto-arrange that CANNOT be turned off (the real Windows shell sometimes
