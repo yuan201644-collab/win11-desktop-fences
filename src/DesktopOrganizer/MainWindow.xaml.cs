@@ -217,7 +217,7 @@ public partial class MainWindow : Window
         // "所有框恢复自动布局" — one-shot unpin: every box falls back to auto-packing (colors and
         // edge-padding overrides stay). Grayed out while no box is pinned; the Opening hook keeps
         // that fresh, since the menu is built once but the pin state changes any time.
-        _trayResetLayoutsItem = new Forms.ToolStripMenuItem("取消所有框的固定位置");
+        _trayResetLayoutsItem = new Forms.ToolStripMenuItem("清除所有框的位置记忆");
         _trayResetLayoutsItem.Click += (_, _) => _overlay.ResetAllFenceLayouts();
         menu.Items.Add(_trayResetLayoutsItem);
         menu.Opening += (_, _) => _trayResetLayoutsItem.Enabled = _overlay.AnyPinnedLayouts;
@@ -333,7 +333,7 @@ public partial class MainWindow : Window
         }
         if (_overlay.AnyPinnedLayouts)
         {
-            var resetLayouts = new System.Windows.Controls.MenuItem { Header = "取消所有框的固定位置" };
+            var resetLayouts = new System.Windows.Controls.MenuItem { Header = "清除所有框的位置记忆" };
             resetLayouts.Click += (_, _) => _overlay.ResetAllFenceLayouts();
             cm.Items.Add(resetLayouts);
         }
@@ -635,7 +635,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Per-box size editor on the 分类布局 page: one row per box with pixel-exact width/height
     /// inputs. A box with no pinned rectangle auto-packs with the rest on arrange; typing a size
-    /// pins it to that rectangle (anchored at its current position). 清除固定 unpins it again.
+    /// pins it to that rectangle (anchored at its current position). 清除位置记忆 unpins it again.
     /// Rows are data-driven from the controller, mirroring the 配色 page's per-box rows.
     /// </summary>
     private void BuildLayoutSection()
@@ -702,7 +702,7 @@ public partial class MainWindow : Window
             {
                 // No window was ever drawn for this box (hidden or never arranged) — nothing to
                 // anchor to. Don't silently drop the edit: tell the user what to do first.
-                MessageBox.Show($"「{title}」框还没有显示过，无法固定位置。\n\n请先在主界面点「整理并显示分组」，再回来调整尺寸。",
+                MessageBox.Show($"「{title}」框还没有显示过，无法记住它的位置。\n\n请先在主界面点「整理并显示分组」，再回来调整尺寸。",
                     "桌面图标整理", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
@@ -754,7 +754,7 @@ public partial class MainWindow : Window
 
     /// <summary>Repaints the trailing action area of one layout row. Three states, mirroring
     /// <see cref="SeedLayoutValues"/> exactly so the hint never contradicts the input boxes:
-    /// pinned → 清除固定; unpinned with a live window → auto-pack (editable); unpinned and never
+    /// pinned → 清除位置记忆; unpinned with a live window → auto-pack (editable); unpinned and never
     /// drawn (hidden box / not arranged yet) → inputs disabled with an explanatory hint.</summary>
     private void RefreshLayoutState(string title, StackPanel statePanel)
     {
@@ -770,7 +770,7 @@ public partial class MainWindow : Window
 
         if (_overlay.GetFenceLayout(title) is not null)
         {
-            var clear = new Button { Content = "清除固定", Margin = new Thickness(8, 0, 0, 0) };
+            var clear = new Button { Content = "清除位置记忆", Margin = new Thickness(8, 0, 0, 0) };
             clear.Click += (_, _) =>
             {
                 _overlay.ClearFenceLayout(title);
@@ -1272,8 +1272,8 @@ public partial class MainWindow : Window
     {
         if (!_overlay.HasPersonalization)
         {
-            MessageBox.Show("当前没有任何分类框的个性化设置（单独的框颜色 / 框边距 / 固定位置）。",
-                "清除框颜色·边距·固定", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("当前没有任何分类框的个性化设置（单独的框颜色 / 框边距 / 位置记忆）。",
+                "清除框颜色·边距·位置记忆", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -1281,9 +1281,9 @@ public partial class MainWindow : Window
             "将清除所有分类框的个性化设置：\n" +
             "  • 单独设置的框颜色\n" +
             "  • 单独设置的框边距\n" +
-            "  • 手动固定的框位置\n\n" +
+            "  • 手动记住的框位置\n\n" +
             "清除后所有框将恢复为全局默认外观并自动打包。此操作不可撤销，是否继续？",
-            "清除框颜色·边距·固定", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            "清除框颜色·边距·位置记忆", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (result != MessageBoxResult.Yes) return;
 
         _overlay.ResetAllPersonalization();
@@ -1299,15 +1299,15 @@ public partial class MainWindow : Window
     {
         if (!_overlay.AnyPinnedLayouts)
         {
-            MessageBox.Show("当前没有任何分类框被固定位置。",
-                "取消所有框的固定位置", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("当前没有任何分类框记住过位置。",
+                "清除所有框的位置记忆", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
         var result = MessageBox.Show(
-            "将取消所有分类框的固定位置，恢复为自动打包布局。\n" +
+            "将清除所有分类框的位置记忆，恢复为自动打包布局。\n" +
             "图标不移动；框颜色与框边距设置不受影响。是否继续？",
-            "取消所有框的固定位置", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            "清除所有框的位置记忆", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (result != MessageBoxResult.Yes) return;
 
         _overlay.ResetAllFenceLayouts();

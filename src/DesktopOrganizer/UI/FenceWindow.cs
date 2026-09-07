@@ -273,7 +273,7 @@ public sealed class FenceWindow : Window
         _pinGlyph.Opacity = pinMode == FencePinMode.Auto ? UnpinnedPinOpacity : 1.0;
         _pinGlyph.ToolTip = pinMode switch
         {
-            FencePinMode.Locked => "已锁定：位置和大小都固定，拖不动也缩不动（整理时框内图标仍会重排）。点击解锁并回到自动排列。",
+            FencePinMode.Locked => "已锁定：位置和大小都锁死，拖不动也缩不动（整理时框内图标仍会重排）。点击解锁并回到自动排列。",
             FencePinMode.Pinned => "已记住位置：整理/刷新时保持这里，但仍可拖动或缩放。点击锁定。",
             _ => "自动排列：整理/刷新时会被重新装箱。点击记住当前位置。",
         };

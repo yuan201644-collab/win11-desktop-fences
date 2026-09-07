@@ -153,13 +153,13 @@
         <!-- Actions + the transient "已保存" hint. -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="12,12,12,10">
             <Button Name="GroupButton" Content="整理并显示分组" Click="GroupButton_Click" Padding="10,4,10,4"
-                    ToolTip="按分组规则把桌面图标分类，并从主屏起点重新装箱排列。会移动图标本身；拖动固定过的框仍用固定位置。" />
+                    ToolTip="按分组规则把桌面图标分类，并从主屏起点重新装箱排列。会移动图标本身；拖动过的框仍用记住的位置。" />
             <Button Name="RestoreButton" Content="恢复上次布局" Click="RestoreButton_Click" Padding="10,4,10,4" Margin="8,0,0,0"
-                    ToolTip="把图标回滚到最近一次保存的位置快照（含分组和手动调整）。不动框的颜色、边距和固定状态。" />
-            <Button Name="ClearPersonalizationButton" Content="清除框颜色·边距·固定" Click="ClearPersonalizationButton_Click" Padding="10,4,10,4" Margin="8,0,0,0"
-                    ToolTip="把每个框单独设置的颜色、边距、固定位置全部还原为默认（不可撤销）。图标位置不动，全局默认设置不受影响。" />
-            <Button Name="ResetLayoutsButton" Content="取消所有框的固定位置" Click="ResetLayoutsButton_Click" Padding="10,4,10,4" Margin="8,0,0,0"
-                    ToolTip="只解除拖动/缩放留下的固定矩形，框回到贴着图标当前位置的自动模式。图标不移动，颜色和边距保留。" />
+                    ToolTip="把图标回滚到最近一次保存的位置快照（含分组和手动调整）。不动框的颜色、边距和位置记忆。" />
+            <Button Name="ClearPersonalizationButton" Content="清除框颜色·边距·位置记忆" Click="ClearPersonalizationButton_Click" Padding="10,4,10,4" Margin="8,0,0,0"
+                    ToolTip="把每个框单独设置的颜色、边距、位置记忆全部还原为默认（不可撤销）。图标位置不动，全局默认设置不受影响。" />
+            <Button Name="ResetLayoutsButton" Content="清除所有框的位置记忆" Click="ResetLayoutsButton_Click" Padding="10,4,10,4" Margin="8,0,0,0"
+                    ToolTip="只清除拖动/缩放留下的位置记忆，框回到贴着图标当前位置的自动模式。图标不移动，颜色和边距保留。" />
             <TextBlock x:Name="SavedHint" Text="已保存" FontSize="13" Foreground="#2E7D32" FontWeight="SemiBold"
                        VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed" />
         </StackPanel>
@@ -212,7 +212,7 @@
                     <Border Style="{StaticResource SectionCard}">
                         <StackPanel>
                             <TextBlock Text="分类布局" Style="{StaticResource SectionTitle}" />
-                            <TextBlock Text="给每个框指定像素尺寸。没动过的框自动打包，填了宽高即固定该框（或直接在桌面上拖动调整）；「清除固定」让它回到自动打包。"
+                            <TextBlock Text="给每个框指定像素尺寸。没动过的框自动打包，填了宽高即记住该框的位置（或直接在桌面上拖动调整）；「清除位置记忆」让它回到自动打包。"
                                        Style="{StaticResource SectionHint}" />
                             <CheckBox x:Name="LiveSortBox" Content="新图标自动归位（出现的新图标自动放进所属分类框）"
                                       Margin="0,8,0,0" HorizontalAlignment="Left" />
