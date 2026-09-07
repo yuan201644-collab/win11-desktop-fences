@@ -21,7 +21,7 @@ public sealed class NullOverlayHost : IOverlayHost
     private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
 
     public event Action<string>? CollapseToggled;
-    public event Action<string>? PinToggled;
+    public event Action<string>? PinCycled;
     public event Action<string, int, int>? ContextMenuRequested;
     public event Action<string>? DragStarted;
     public event Action<string, int, int>? DragMoved;
@@ -41,15 +41,21 @@ public sealed class NullOverlayHost : IOverlayHost
 
     public void SetVisible(bool visible) { }
 
-    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null)
+    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null,
+        IReadOnlyCollection<string>? lockedTitles = null)
     {
         LastClusters = clusters.ToList();
         LastPinnedTitles = pinnedTitles;
+        LastLockedTitles = lockedTitles;
     }
 
     /// <summary>The pinned-titles set from the most recent <see cref="Sync"/> call (null when the
     /// controller passed none), so tests can assert which boxes were drawn as pinned.</summary>
     public IReadOnlyCollection<string>? LastPinnedTitles { get; private set; }
+
+    /// <summary>The locked-titles set from the most recent <see cref="Sync"/> call — a locked box is
+    /// pinned AND refuses drag/resize, so tests can tell the two badge states apart.</summary>
+    public IReadOnlyCollection<string>? LastLockedTitles { get; private set; }
 
     /// <summary>Every single-box move the controller asked for (title → rect), newest last. The
     /// drag path only writes here as a CORRECTIVE snap (when the clamped drop spot differs from
@@ -75,11 +81,11 @@ public sealed class NullOverlayHost : IOverlayHost
 
     public void SetFencePreview(string title, RectI? bounds) => LastPreviewBounds = bounds;
 
-    /// <summary>Every pin-badge repaint the controller asked for (title → pinned), newest last.
-    /// The badge is a toggle, so pinning/unpinning must repaint it without moving the box.</summary>
-    public List<(string Title, bool Pinned)> PinnedToggles { get; } = new();
+    /// <summary>Every badge repaint the controller asked for (title → mode), newest last. The badge
+    /// is a cycle button, so a pin-mode change must repaint it without moving the box.</summary>
+    public List<(string Title, FencePinMode Mode)> PinModeToggles { get; } = new();
 
-    public void SetFencePinned(string title, bool pinned) => PinnedToggles.Add((title, pinned));
+    public void SetFencePinMode(string title, FencePinMode mode) => PinModeToggles.Add((title, mode));
 
     // Test-side triggers for the drag gesture (a real FenceWindow raises these from mouse events).
     public void RaiseDragStarted(string title) => DragStarted?.Invoke(title);
@@ -88,7 +94,7 @@ public sealed class NullOverlayHost : IOverlayHost
 
     /// <summary>Test-side trigger for the pin badge click (a real FenceWindow raises this from the
     /// badge's mouse-down).</summary>
-    public void RaisePinToggled(string title) => PinToggled?.Invoke(title);
+    public void RaisePinCycled(string title) => PinCycled?.Invoke(title);
 
     /// <summary>Test-side trigger for the resize gesture (a real FenceWindow raises this from the
     /// edge-grab mouse-down).</summary>

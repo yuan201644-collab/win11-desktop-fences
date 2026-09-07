@@ -93,39 +93,48 @@ public class FencePersonalizationTests
         => BoxGrouping.FromEntry(new SoftwareGroupingConfig(), ic.Name, ic.Path, null).Title;
 
     [Fact]
-    public void ToggleFencePin_PinnedBox_UnpinsItAndRepacks()
+    public void PinCycle_PinnedBox_LocksFirst_AndOnlyTheNextClickForgetsTheRectangle()
     {
-        // The badge used to be a read-only state light. Toggling a pinned box must forget its
-        // rectangle — ClearFenceLayout refreshes, so the box re-packs with the others right away.
+        // The badge cycles Auto → Pinned → Locked → Auto. From Pinned, one click must LOCK, not
+        // throw the rectangle away — otherwise there is no way to reach the locked state at all.
         var f = Build();
         f.Controller.ArrangeAndShow(); // membership first: a box the user can click must be rendered
         f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
-        Assert.NotNull(f.Controller.GetFenceLayout(BoxA));
+        Assert.Equal(FencePinMode.Pinned, f.Controller.GetFencePinMode(BoxA));
 
-        f.Host.RaisePinToggled(BoxA);
+        f.Host.RaisePinCycled(BoxA);
 
+        Assert.Equal(FencePinMode.Locked, f.Controller.GetFencePinMode(BoxA));
+        Assert.Equal(new FenceLayout(500, 300, 420, 300, true), f.Controller.GetFenceLayout(BoxA));
+
+        // Only the second click returns it to the crowd (ClearFenceLayout refreshes, so it re-packs).
+        f.Host.RaisePinCycled(BoxA);
+
+        Assert.Equal(FencePinMode.Auto, f.Controller.GetFencePinMode(BoxA));
         Assert.Null(f.Controller.GetFenceLayout(BoxA));
     }
 
     [Fact]
-    public void ToggleFencePin_UnpinnedBox_PinsToItsCurrentRectangleWithoutMovingAnything()
+    public void PinCycle_AutoBox_PinsToItsCurrentRectangleWithoutMovingAnything()
     {
-        // Toggling an auto-packing box pins it exactly where it stands: no icon re-layout (the icons
-        // are already inside that rectangle) and no refresh (a refresh would shuffle every OTHER
-        // auto-packing box for a decision that concerns only this one). Only the badge repaints.
+        // Clicking an auto-packing box remembers exactly where it stands: no icon re-layout (the
+        // icons are already inside that rectangle) and no refresh (a refresh would shuffle every
+        // OTHER auto-packing box for a decision that concerns only this one). Only the badge repaints.
         var f = Build();
         f.Controller.ArrangeAndShow();
-        Assert.Null(f.Controller.GetFenceLayout(BoxA)); // fixture sanity: starts unpinned
+        Assert.Equal(FencePinMode.Auto, f.Controller.GetFencePinMode(BoxA)); // fixture sanity
         f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
 
-        f.Host.RaisePinToggled(BoxA);
+        f.Host.RaisePinCycled(BoxA);
 
         Assert.Equal(new FenceLayout(300, 350, 420, 300), f.Controller.GetFenceLayout(BoxA));
-        Assert.Equal((BoxA, true), Assert.Single(f.Host.PinnedToggles));
+        Assert.Equal((BoxA, FencePinMode.Pinned), Assert.Single(f.Host.PinModeToggles));
         Assert.Empty(f.Host.MovedBounds); // nothing was pushed anywhere
 
-        // And back: a second click unpins it again (a real toggle, not a one-way switch).
-        f.Host.RaisePinToggled(BoxA);
+        // And on around the cycle: Pinned → Locked → Auto again.
+        f.Host.RaisePinCycled(BoxA);
+        Assert.Equal(FencePinMode.Locked, f.Controller.GetFencePinMode(BoxA));
+        f.Host.RaisePinCycled(BoxA);
         Assert.Null(f.Controller.GetFenceLayout(BoxA));
     }
 
@@ -169,6 +178,43 @@ public class FencePersonalizationTests
         Assert.Equal(420, loaded.Width);
         Assert.Equal(300, loaded.Height);
         Assert.Null(controller2.GetFenceLayout(BoxB)); // untouched box stays unpinned
+    }
+
+    [Fact]
+    public void LockedLayout_PersistsAcrossControllerInstances()
+    {
+        // A lock the user set must survive a restart — otherwise "locked" only means "until reboot".
+        var f = Build();
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
+        f.Controller.SetFenceLocked(BoxA, true);
+
+        var controller2 = NewController(f);
+
+        Assert.True(controller2.IsFenceLocked(BoxA));
+        Assert.Equal(FencePinMode.Locked, controller2.GetFencePinMode(BoxA));
+
+        // And the lock is releasable, persistently.
+        controller2.SetFenceLocked(BoxA, false);
+        Assert.Equal(FencePinMode.Pinned, NewController(f).GetFencePinMode(BoxA)); // pinned, not auto
+    }
+
+    [Fact]
+    public void Sync_ReceivesLockedTitles_SeparatelyFromPinnedOnes()
+    {
+        // The badge has to tell "remembers this spot" from "frozen solid", so the locked set rides
+        // along next to the pinned set instead of being folded into it.
+        var f = Build();
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(500, 300, 420, 300));
+        f.Controller.SetFenceLayout(BoxB, new FenceLayout(1000, 300, 420, 300));
+        f.Controller.SetFenceLocked(BoxA, true);
+        f.Controller.ArrangeAndShow();
+
+        Assert.NotNull(f.Host.LastPinnedTitles);
+        Assert.Contains(BoxA, f.Host.LastPinnedTitles!); // locked implies pinned
+        Assert.Contains(BoxB, f.Host.LastPinnedTitles!);
+        Assert.NotNull(f.Host.LastLockedTitles);
+        Assert.Contains(BoxA, f.Host.LastLockedTitles!);
+        Assert.DoesNotContain(BoxB, f.Host.LastLockedTitles!);
     }
 
     [Fact]

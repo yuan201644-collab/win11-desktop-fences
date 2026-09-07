@@ -20,14 +20,15 @@ public sealed class FenceHost : IOverlayHost
     private readonly Dictionary<string, FenceWindow> _fences = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pinnedTitles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _lockedTitles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, OverlayAppearance> _fenceColors = new(StringComparer.OrdinalIgnoreCase);
     private OverlayAppearance _appearance = OverlayAppearance.Default;
 
     /// <summary>Raised when a fence's header is double-clicked — flip its collapsed state.</summary>
     public event Action<string>? CollapseToggled;
 
-    /// <summary>Raised when a fence's pin badge is clicked — flip its pinned state.</summary>
-    public event Action<string>? PinToggled;
+    /// <summary>Raised when a fence's badge is clicked — cycle its pin mode.</summary>
+    public event Action<string>? PinCycled;
 
     /// <summary>Raised when a fence's header (incl. collapsed tab) is right-clicked — show its context menu.</summary>
     public event Action<string, int, int>? ContextMenuRequested;
@@ -90,7 +91,8 @@ public sealed class FenceHost : IOverlayHost
     /// Resizes the fence mesh to match a fresh cluster layout. Uses each window's own (reparented)
     /// geometry; windows whose title is gone are hidden, and new titles get a window on demand.
     /// </summary>
-    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null)
+    public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null,
+        IReadOnlyCollection<string>? lockedTitles = null)
     {
         // First-wins build: two clusters can never share a title by construction, but a malformed
         // grouping config could in theory produce duplicates — fail safe (keep the first) rather than
@@ -103,6 +105,9 @@ public sealed class FenceHost : IOverlayHost
         _pinnedTitles.Clear();
         if (pinnedTitles is not null)
             foreach (var t in pinnedTitles) _pinnedTitles.Add(t);
+        _lockedTitles.Clear();
+        if (lockedTitles is not null)
+            foreach (var t in lockedTitles) _lockedTitles.Add(t);
 
         foreach (var (title, win) in _fences.ToList())
         {
@@ -114,7 +119,7 @@ public sealed class FenceHost : IOverlayHost
             var win = GetWindow(cluster.Title);
             win.SetIconCount(cluster.IconCount);
             win.Render(cluster.Bounds.Left, cluster.Bounds.Top, cluster.Bounds.Width, cluster.Bounds.Height, headerPx,
-                IsCollapsed(cluster.Title), pinned: _pinnedTitles.Contains(cluster.Title));
+                IsCollapsed(cluster.Title), PinModeOf(cluster.Title));
             if (!win.IsVisible) win.Show();
         }
     }
@@ -133,7 +138,7 @@ public sealed class FenceHost : IOverlayHost
     {
         if (!_fences.TryGetValue(title, out var win)) return;
         win.Render(bounds.Left, bounds.Top, bounds.Width, bounds.Height, FenceHeader.HeaderPx, IsCollapsed(title),
-            _pinnedTitles.Contains(title));
+            PinModeOf(title));
     }
 
     /// <summary>Like <see cref="SetFenceBounds"/>, but the window's position GLIDES to the target
@@ -143,7 +148,7 @@ public sealed class FenceHost : IOverlayHost
     {
         if (!_fences.TryGetValue(title, out var win)) return;
         win.RenderAnimated(bounds.Left, bounds.Top, bounds.Width, bounds.Height, FenceHeader.HeaderPx,
-            IsCollapsed(title), _pinnedTitles.Contains(title), glideMilliseconds);
+            IsCollapsed(title), PinModeOf(title), glideMilliseconds);
     }
 
     // The drag snap preview: one lazily created ghost window shared by all fences (only one drag
@@ -162,15 +167,35 @@ public sealed class FenceHost : IOverlayHost
         _preview.ShowAt(bounds.Value);
     }
 
-    /// <summary>Repaints one fence's pin badge (solid vs faded) WITHOUT moving the box: pinning is
-    /// a promise about the next arrange, not a layout change — a full re-sync here would shuffle
-    /// every other auto-packing box under the user's cursor.</summary>
-    public void SetFencePinned(string title, bool pinned)
+    /// <summary>Repaints one fence's badge (faded pin / solid pin / padlock) and re-arms its
+    /// drag-resize lock WITHOUT moving the box: a pin-mode change is a promise about the next
+    /// arrange, not a layout change — a full re-sync here would shuffle every other auto-packing
+    /// box under the user's cursor.</summary>
+    public void SetFencePinMode(string title, FencePinMode mode)
     {
-        if (pinned) _pinnedTitles.Add(title);
-        else _pinnedTitles.Remove(title);
+        switch (mode)
+        {
+            case FencePinMode.Locked:
+                _pinnedTitles.Add(title); // a locked box is pinned by definition
+                _lockedTitles.Add(title);
+                break;
+            case FencePinMode.Pinned:
+                _pinnedTitles.Add(title);
+                _lockedTitles.Remove(title);
+                break;
+            default:
+                _pinnedTitles.Remove(title);
+                _lockedTitles.Remove(title);
+                break;
+        }
         if (GetFenceBounds(title) is { } b) SetFenceBounds(title, b); // redraws with the new badge
     }
+
+    /// <summary>The badge state one box should show: padlock > solid pin > faded pin.</summary>
+    private FencePinMode PinModeOf(string title)
+        => _lockedTitles.Contains(title) ? FencePinMode.Locked
+            : _pinnedTitles.Contains(title) ? FencePinMode.Pinned
+            : FencePinMode.Auto;
 
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
     /// this box (no window yet, or it was never shown so WPF hasn't assigned geometry).</summary>
@@ -211,7 +236,7 @@ public sealed class FenceHost : IOverlayHost
         win.ClusterDrag += (t, dx, dy) => DragMoved?.Invoke(t, dx, dy);
         win.ClusterDragEnd += (t) => DragEnded?.Invoke(t);
         win.TitleToggleCollapse += (t) => CollapseToggled?.Invoke(t);
-        win.TitleTogglePin += (t) => PinToggled?.Invoke(t);
+        win.TitleCyclePin += (t) => PinCycled?.Invoke(t);
         win.ContextMenuRequested += (t, x, y) => ContextMenuRequested?.Invoke(t, x, y);
         win.ResizeStarted += (t) => ResizeStarted?.Invoke(t);
         win.ResizeMoved += (t, r) => ResizeMoved?.Invoke(t, r);

@@ -183,7 +183,7 @@ public sealed class FenceOverlayController : IDisposable
         _host.ResizeMoved += OnResizeMoved;
         _host.ResizeEnded += OnResizeEnded;
         _host.CollapseToggled += OnCollapseToggled;
-        _host.PinToggled += OnPinToggled;
+        _host.PinCycled += OnPinCycled;
         _host.ContextMenuRequested += (t, x, y) => FenceContextMenu?.Invoke(t, x, y);
 
         // Restore the persisted collapsed state. Records from the legacy (plain string array)
@@ -652,7 +652,10 @@ public sealed class FenceOverlayController : IDisposable
 
         // Pinned titles ride along so each fence header can badge itself with the pin glyph.
         _host.Sync(clusters, FenceHeader.HeaderPx,
-            _fenceLayouts.Count > 0 ? (IReadOnlyCollection<string>)_fenceLayouts.Keys.ToList() : null);
+            _fenceLayouts.Count > 0 ? (IReadOnlyCollection<string>)_fenceLayouts.Keys.ToList() : null,
+            _fenceLayouts.Count > 0
+                ? (IReadOnlyCollection<string>)_fenceLayouts.Where(kv => kv.Value.Locked).Select(kv => kv.Key).ToList()
+                : null);
         _host.SetVisible(shown);
         SaveLayout(); // follow manual drags so the final layout persists
     }
@@ -778,28 +781,57 @@ public sealed class FenceOverlayController : IDisposable
         ForceRefresh();
     }
 
-    /// <summary>Flips a box between "keeps this rectangle" and "auto-packs with the rest" — the
-    /// action behind the header's pin badge (which is a TOGGLE, not just a state light).</summary>
-    public void ToggleFencePin(string title) => OnPinToggled(title);
+    /// <summary>Cycles one box's pin mode: Auto → Pinned → Locked → Auto. The action behind the
+    /// header badge (a CYCLE BUTTON, not just a state light).</summary>
+    public void CycleFencePinMode(string title) => OnPinCycled(title);
 
-    private void OnPinToggled(string title)
+    private void OnPinCycled(string title)
     {
         if (!_membership.ContainsKey(title)) return;
-        if (_fenceLayouts.ContainsKey(title))
+        switch (GetFencePinMode(title))
         {
-            // Already pinned → forget its rectangle and let it re-pack with the others immediately
-            // (ClearFenceLayout persists and refreshes).
-            ClearFenceLayout(title);
-            return;
+            case FencePinMode.Pinned:
+                // Pinned → Locked: same rectangle, but now it also refuses drag and resize. Nothing
+                // moves and no refresh — locking one box is not a layout decision about the others.
+                SetFenceLocked(title, true);
+                return;
+
+            case FencePinMode.Locked:
+                // Locked → Auto: drop the rectangle entirely (which unlocks it too) and let it
+                // re-pack with the others immediately (ClearFenceLayout persists and refreshes).
+                ClearFenceLayout(title);
+                return;
         }
-        // Not pinned → pin it exactly where it is NOW. Nothing moves: no icon re-layout (the box is
-        // already there, its icons are already inside it) and no refresh (that would yank every
-        // OTHER auto-packing box around, and pinning one box is not a layout decision about them).
-        // Only the badge is repainted, so the click reads as "locked" instead of "rearranged".
+
+        // Auto → Pinned: remember exactly where it is NOW. Nothing moves: no icon re-layout (the box
+        // is already there, its icons are already inside it) and no refresh (that would yank every
+        // OTHER auto-packing box around). Only the badge is repainted, so the click reads as
+        // "remembered" instead of "rearranged".
         var rect = _host.GetFenceBounds(title) ?? IconBoxRect(title);
         if (rect is null || rect.Value.Width <= 0 || rect.Value.Height <= 0) return;
         PinBox(title, rect.Value);
-        _host.SetFencePinned(title, true);
+        _host.SetFencePinMode(title, FencePinMode.Pinned);
+    }
+
+    /// <summary>The badge state of <paramref name="title"/>: Locked, Pinned, or Auto (re-packs).</summary>
+    public FencePinMode GetFencePinMode(string title)
+        => _fenceLayouts.TryGetValue(title, out var l)
+            ? (l.Locked ? FencePinMode.Locked : FencePinMode.Pinned)
+            : FencePinMode.Auto;
+
+    /// <summary>True when the box refuses drag and resize (its icons still re-pack inside it).</summary>
+    public bool IsFenceLocked(string title) => GetFencePinMode(title) == FencePinMode.Locked;
+
+    /// <summary>Locks or unlocks a box. A locked box keeps its pinned rectangle AND refuses to be
+    /// dragged or resized — the lock is about the BOX, not its icons: they still re-pack inside it
+    /// on every arrange (new icons join, the sort order is honoured).</summary>
+    public void SetFenceLocked(string title, bool locked)
+    {
+        if (!_fenceLayouts.TryGetValue(title, out var fl)) return; // auto-packs: nothing to lock yet
+        if (fl.Locked == locked) return;
+        _fenceLayouts[title] = fl with { Locked = locked };
+        SaveFenceLayouts();
+        _host.SetFencePinMode(title, GetFencePinMode(title)); // repaint the badge, move nothing
     }
 
     /// <summary>Public entry used by the right-click menu: flip one fence's collapsed state.</summary>
@@ -903,7 +935,9 @@ public sealed class FenceOverlayController : IDisposable
             fl.Y - (target.Top - previous.Top),
             fl.Width + (target.Left - previous.Left) + (target.Right - previous.Right),
             fl.Height + (target.Top - previous.Top) + (target.Bottom - previous.Bottom)));
-        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
+        // Keep the lock flag: re-clamping / resizing / re-pinning a locked box must not quietly
+        // unlock it (a display change must never relax a deliberate user decision).
+        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title));
         SaveFenceLayouts();
     }
 
@@ -963,6 +997,7 @@ public sealed class FenceOverlayController : IDisposable
     private void OnResizeStarted(string title)
     {
         if (!_membership.ContainsKey(title)) return;
+        if (IsFenceLocked(title)) return; // locked boxes have no grabbable edges; the window agrees
         _resizing = true;
         _resizeStart = ParkClusterIcons(title);
     }
@@ -973,6 +1008,7 @@ public sealed class FenceOverlayController : IDisposable
     private void OnResizeMoved(string title, RectI bounds)
     {
         if (!_arranged) return;
+        if (IsFenceLocked(title)) return; // locked box: no live geometry tracking either
         _host.SetFenceBounds(title, ClampFenceRect(bounds));
     }
 
@@ -983,6 +1019,7 @@ public sealed class FenceOverlayController : IDisposable
     /// must never stay parked.</summary>
     private void OnResizeEnded(string title)
     {
+        if (IsFenceLocked(title)) return; // locked box: the gesture never started, nothing to settle
         bool parked = _resizing;
         _resizing = false;
         var final = _host.GetFenceBounds(title);
@@ -1013,7 +1050,9 @@ public sealed class FenceOverlayController : IDisposable
     private void ApplyFenceLayout(string title, RectI b)
     {
         var clamped = ClampFenceRect(b);
-        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
+        // Keep the lock flag: re-clamping / resizing / re-pinning a locked box must not quietly
+        // unlock it (a display change must never relax a deliberate user decision).
+        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title));
         try
         {
             _layout.ArrangeOneFence(title, clamped, _sortMode);
@@ -1631,7 +1670,9 @@ public sealed class FenceOverlayController : IDisposable
         {
             var fl = _fenceLayouts[title];
             var clamped = ClampFenceRect(new RectI(fl.X, fl.Y, fl.Width, fl.Height));
-            _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
+            // Keep the lock flag: re-clamping / resizing / re-pinning a locked box must not quietly
+        // unlock it (a display change must never relax a deliberate user decision).
+        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title));
             _layout.ArrangeOneFence(title, clamped, _sortMode);
         }
         if (_fenceLayouts.Count > 0) SaveFenceLayouts();
@@ -1816,6 +1857,10 @@ public sealed class FenceOverlayController : IDisposable
     {
         _host.SetFencePreview(title, null); // never carry a stale ghost into a new gesture
         if (!_membership.ContainsKey(title)) return;
+        // A LOCKED box is inert: no drag, no park, no preview. The window itself refuses to start
+        // the gesture too; this is the backstop that keeps the promise even if the UI path is
+        // bypassed (and the one the headless tests can actually observe).
+        if (IsFenceLocked(title)) return;
         _dragging = true;
         _dragTitle = title;
         _lastDeltaX = _lastDeltaY = 0;
@@ -2010,7 +2055,9 @@ public sealed class FenceOverlayController : IDisposable
         try
         {
             var clamped = ClampFenceRect(rect);
-            _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height);
+            // Keep the lock flag: re-clamping / resizing / re-pinning a locked box must not quietly
+        // unlock it (a display change must never relax a deliberate user decision).
+        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title));
             SaveFenceLayouts();
         }
         catch (Exception)

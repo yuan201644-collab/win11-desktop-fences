@@ -15,9 +15,10 @@ public interface IOverlayHost
     /// <summary>Raised when a fence's header is double-clicked — flip its collapsed state.</summary>
     event Action<string>? CollapseToggled;
 
-    /// <summary>Raised when a fence's pin badge is clicked — flip its pinned state (pinned boxes
-    /// keep their rectangle across arranges instead of auto-packing).</summary>
-    event Action<string>? PinToggled;
+    /// <summary>Raised when a fence's badge is clicked — cycle its pin mode (Auto → Pinned →
+    /// Locked → Auto). Pinned boxes keep their rectangle across arranges; locked ones also refuse
+    /// to be dragged or resized.</summary>
+    event Action<string>? PinCycled;
 
     /// <summary>Raised when a fence's header (incl. collapsed tab) is right-clicked — show its context menu.</summary>
     event Action<string, int, int>? ContextMenuRequested;
@@ -49,8 +50,10 @@ public interface IOverlayHost
     /// <summary>Shows or hides the whole overlay mesh.</summary>
     void SetVisible(bool visible);
 
-    /// <summary>Resizes the fence mesh to match a fresh cluster layout.</summary>
-    void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null);
+    /// <summary>Resizes the fence mesh to match a fresh cluster layout. <paramref name="pinnedTitles"/>
+    /// and <paramref name="lockedTitles"/> drive each box's badge (faded pin / solid pin / padlock).</summary>
+    void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null,
+        IReadOnlyCollection<string>? lockedTitles = null);
 
     /// <summary>Moves/resizes one fence window live (no icon moves) — used while the user drags a box edge.</summary>
     void SetFenceBounds(string title, RectI bounds);
@@ -65,9 +68,10 @@ public interface IOverlayHost
     /// the release itself still trusts the icons' measured displacement, not this prediction.</summary>
     void SetFencePreview(string title, RectI? bounds);
 
-    /// <summary>Repaints one fence's pin badge (solid vs faded) without moving it. The badge is a
-    /// toggle, so pinning/unpinning must update it live without disturbing the layout.</summary>
-    void SetFencePinned(string title, bool pinned);
+    /// <summary>Repaints one fence's badge (faded pin / solid pin / padlock) and re-arms the
+    /// drag-resize lock, without moving the box. The badge is a cycle button, so a pin-mode change
+    /// must update it live without disturbing the layout of the other boxes.</summary>
+    void SetFencePinMode(string title, FencePinMode mode);
 
     /// <summary>The fence window's current screen rectangle, or null when the overlay never drew
     /// this box (window absent or not laid out). The settings layout editor uses this as the X/Y

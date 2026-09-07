@@ -71,6 +71,29 @@ public class FenceLayoutStoreTests
     }
 
     [Fact]
+    public void Load_FileWrittenBeforeLockingExisted_ComesBackUnlocked()
+    {
+        // Files written by older builds have no "locked" property. They must still load — as
+        // UNLOCKED pins. A deserialize failure here is swallowed by Load's catch-all and would
+        // silently wipe every box's remembered position, so this is worth pinning down.
+        var path = TempPath();
+        try
+        {
+            File.WriteAllText(path, "{\"办公\":{\"x\":1,\"y\":2,\"width\":3,\"height\":4}}");
+
+            var loaded = FenceLayoutStore.Load(path);
+
+            var (_, layout) = Assert.Single(loaded);
+            Assert.Equal(new FenceLayout(1, 2, 3, 4), layout);
+            Assert.False(layout.Locked);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Save_CreatesParentDirectory()
     {
         var dir = Path.Combine(Path.GetTempPath(), "fencelayout-test-dir-" + Path.GetRandomFileName());

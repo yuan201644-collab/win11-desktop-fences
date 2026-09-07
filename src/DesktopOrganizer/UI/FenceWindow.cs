@@ -29,6 +29,7 @@ public sealed class FenceWindow : Window
     private Border _toggleBtn = null!;
     private TextBlock _toggleGlyph = null!;
     private TextBlock _pinGlyph = null!;
+    private bool _locked; // Locked: refuse drag AND resize (see OnMouseLeftButtonDown / HitResizeEdge)
     private OverlayAppearance _appearance = OverlayAppearance.Default;
 
     // Drag tracking (screen pixels).
@@ -66,9 +67,9 @@ public sealed class FenceWindow : Window
     /// <summary>Raises when the header is double-clicked — the controller flips this box's collapsed state.</summary>
     public event Action<string>? TitleToggleCollapse;
 
-    /// <summary>Raises when the pin badge is clicked — the controller flips this box's pinned state
-    /// (a pinned box keeps its rectangle across arranges instead of auto-packing).</summary>
-    public event Action<string>? TitleTogglePin;
+    /// <summary>Raises when the badge is clicked — the controller cycles this box's pin mode
+    /// (Auto → Pinned → Locked → Auto), so one click always tells you what the next one does.</summary>
+    public event Action<string>? TitleCyclePin;
 
     /// <summary>Raises when the header (incl. the collapsed tab) is right-clicked — the controller
     /// opens a context menu of extra actions at the cursor. Carries the screen-pixel cursor location.</summary>
@@ -226,20 +227,23 @@ public sealed class FenceWindow : Window
     /// <summary>Positions the fence over a cluster's bounds (screen px → DIPs per this window's DPI) and lays out its visuals.
     /// When <paramref name="collapsed"/> the box shrinks to a thin title-band tab (the controller has already
     /// parked the cluster's real icons off-screen, so the tab is all that remains on the desktop).</summary>
-    public void Render(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed, bool pinned = false)
+    public void Render(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed,
+        FencePinMode pinMode = FencePinMode.Auto)
     {
         CancelGlide(); // an explicit position is authority — a running glide must never fight it
-        ApplyLayout(leftPx, topPx, widthPx, heightPx, headerPx, collapsed, pinned, glideMs: 0);
+        ApplyLayout(leftPx, topPx, widthPx, heightPx, headerPx, collapsed, pinMode, glideMs: 0);
     }
 
     /// <summary>Like <see cref="Render"/>, but the position GLIDES to the target (ease-out) over
     /// <paramref name="glideMs"/> while size and glyphs apply instantly. The drag-release magnetic
     /// snap uses this so the box eases onto the icons' lattice spot instead of teleporting. Any
     /// explicit <see cref="Render"/> (the 2s refresh) or a fresh grab cancels the glide.</summary>
-    public void RenderAnimated(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed, bool pinned, int glideMs)
-        => ApplyLayout(leftPx, topPx, widthPx, heightPx, headerPx, collapsed, pinned, glideMs);
+    public void RenderAnimated(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed,
+        FencePinMode pinMode, int glideMs)
+        => ApplyLayout(leftPx, topPx, widthPx, heightPx, headerPx, collapsed, pinMode, glideMs);
 
-    private void ApplyLayout(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed, bool pinned, int glideMs)
+    private void ApplyLayout(int leftPx, int topPx, int widthPx, int heightPx, int headerPx, bool collapsed,
+        FencePinMode pinMode, int glideMs)
     {
         double sx = GetScaleX(), sy = GetScaleY();
         bool shown = !double.IsNaN(Left) && !double.IsNaN(Top);
@@ -262,11 +266,17 @@ public sealed class FenceWindow : Window
 
         // Glyph mirrors the state so the tab itself stays discoverable: ▾ = can collapse, ▸ = can expand.
         _toggleGlyph.Text = collapsed ? "▸" : "▾";
-        // The pin is always visible (it is a toggle): solid = pinned, faded = auto-packs.
-        _pinGlyph.Opacity = pinned ? 1.0 : UnpinnedPinOpacity;
-        _pinGlyph.ToolTip = pinned
-            ? "已固定位置：整理/刷新时保持此框的位置与大小。点击取消固定。"
-            : "未固定位置：整理/刷新时会自动排列。点击固定到当前位置。";
+        // The badge is always visible (it is a cycle button): faded pin = auto-packs, solid pin =
+        // keeps this rectangle, padlock = keeps it AND refuses drag/resize.
+        _locked = pinMode == FencePinMode.Locked;
+        _pinGlyph.Text = _locked ? "🔒" : "📌";
+        _pinGlyph.Opacity = pinMode == FencePinMode.Auto ? UnpinnedPinOpacity : 1.0;
+        _pinGlyph.ToolTip = pinMode switch
+        {
+            FencePinMode.Locked => "已锁定：位置和大小都固定，拖不动也缩不动（整理时框内图标仍会重排）。点击解锁并回到自动排列。",
+            FencePinMode.Pinned => "已记住位置：整理/刷新时保持这里，但仍可拖动或缩放。点击锁定。",
+            _ => "自动排列：整理/刷新时会被重新装箱。点击记住当前位置。",
+        };
 
         // Collapsed: hide the box body and keep just the header (title) spanning the tab width.
         if (collapsed)
@@ -357,6 +367,14 @@ public sealed class FenceWindow : Window
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        // A LOCKED box is inert: no drag, no resize. The badge still works — it handles its own
+        // MouseLeftButtonDown first (a child of the header) and marks it handled, so this never
+        // swallows the click that unlocks the box again.
+        if (_locked)
+        {
+            e.Handled = true;
+            return;
+        }
         // Grabbing the box (drag or resize) kills any magnetic glide — the hand is the authority
         // now, and a glide fighting the gesture's own Left/Top writes would jitter.
         CancelGlide();
@@ -420,7 +438,7 @@ public sealed class FenceWindow : Window
     private void OnPinClicked(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
-        TitleTogglePin?.Invoke(ClusterTitle);
+        TitleCyclePin?.Invoke(ClusterTitle);
     }
 
     /// <summary>Faded opacity of the pin badge on an auto-packing (unpinned) box: still visible
@@ -538,6 +556,7 @@ public sealed class FenceWindow : Window
     /// <summary>Which resize edge the cursor is currently over (screen px), or None.</summary>
     private ResizeEdge HitResizeEdge()
     {
+        if (_locked) return ResizeEdge.None; // a locked box has no grabbable edges
         var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         if (!NativeMethods.GetCursorPos(out var pt) || !NativeMethods.GetWindowRect(hwnd, out var r)) return ResizeEdge.None;
         if (pt.X < r.Left || pt.X >= r.Right || pt.Y < r.Top || pt.Y >= r.Bottom) return ResizeEdge.None;

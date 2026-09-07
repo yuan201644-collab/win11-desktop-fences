@@ -9,9 +9,24 @@ namespace DesktopOrganizer.Core.Layout;
 /// A user-pinned rectangle for one fence box (screen pixels). When present, the layout engine
 /// arranges that box's icons inside this rectangle instead of auto-packing them — so a box the
 /// user resized or moved keeps its shape across re-arranges and restarts. Absent entries mean
-/// "auto pack with the rest".
+/// "auto pack with the rest". <paramref name="Locked"/> additionally freezes the box: a locked
+/// box refuses drag and resize (its icons still re-pack inside it on every arrange).
 /// </summary>
-public sealed record FenceLayout(int X, int Y, int Width, int Height);
+/// <remarks>Optional so files written by older builds (no <c>locked</c> property) load as unlocked.</remarks>
+public sealed record FenceLayout(int X, int Y, int Width, int Height, bool Locked = false);
+
+/// <summary>
+/// The three states a box can be in, cycled by clicking the header badge:
+/// <see cref="Auto"/> re-packs with everything else on the next arrange;
+/// <see cref="Pinned"/> keeps this rectangle (still draggable and resizable);
+/// <see cref="Locked"/> keeps it and refuses to be dragged or resized at all.
+/// </summary>
+public enum FencePinMode
+{
+    Auto,
+    Pinned,
+    Locked,
+}
 
 /// <summary>
 /// Persists the per-box pinned rectangles as JSON (title → <see cref="FenceLayout"/>). Mirrors

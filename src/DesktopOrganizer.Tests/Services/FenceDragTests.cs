@@ -411,4 +411,34 @@ public class FenceDragTests
         f.Host.RaiseDragEnded(BoxA);
         Assert.Null(f.Host.LastPreviewBounds);
     }
+
+    [Fact]
+    public void LockedBox_IgnoresDragAndResizeCompletely()
+    {
+        // "记住位置" still lets you move the box; LOCKED means frozen — the gesture must not even
+        // start, so no icon is ever parked (a park left mid-gesture strands them off-screen if the
+        // app dies) and the rectangle is never rewritten.
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(300, 350, 420, 300));
+        f.Controller.SetFenceLocked(BoxA, true);
+        var before = IconsIn(f, BoxA).Select(ic => ic.Index).OrderBy(i => i)
+            .ToDictionary(i => i, i => f.Provider.GetPosition(i));
+
+        f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
+        f.Host.RaiseDragStarted(BoxA);
+        f.Host.FenceBoundsOverride = new RectI(440, 440, 420, 300); // the hand drops it 140/90 away
+        f.Host.RaiseDragMoved(BoxA, 140, 90);
+        f.Host.RaiseDragEnded(BoxA);
+        f.Host.RaiseResizeStarted(BoxA);
+        f.Host.RaiseResizeMoved(BoxA, new RectI(300, 350, 500, 400));
+        f.Host.RaiseResizeEnded(BoxA);
+
+        Assert.Equal(new FenceLayout(300, 350, 420, 300, true), f.Controller.GetFenceLayout(BoxA));
+        Assert.Empty(f.Host.MovedBounds);
+        Assert.Empty(f.Host.MovedBoundsAnimated);
+        Assert.Null(f.Host.LastPreviewBounds);
+        foreach (var (idx, pos) in before)
+            Assert.Equal(pos, f.Provider.GetPosition(idx)); // never parked, never moved
+    }
 }
