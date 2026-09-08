@@ -122,6 +122,46 @@ public class DesktopLayoutServiceTests
             Assert.NotEqual(before[i], provider.GetPosition(i));
     }
 
+    /// <summary>
+    /// Regression (2026-09-08 first-arrange title overlap): two vertically stacked boxes must keep
+    /// the SAME lattice phase — the row pitch between the upper box's last row and the lower box's
+    /// first row must be a whole multiple of the cell height. Explorer snaps each written
+    /// coordinate to the lattice independently, so a non-multiple raw distance (the old
+    /// FenceGapY=20 gave 136 = 82+54 on the real grid) lets the lower box's rows snap up onto the
+    /// pitch right below the upper box's last row; its 34px title band then overlaps that row.
+    /// Reverse-verified: with FenceGapY=20 this test fails (diff % cellH == 54).
+    /// </summary>
+    [Fact]
+    public void ArrangeIntoFence_StackedBoxes_ShareLatticePhase_NoTitleOverlap()
+    {
+        var (provider, service) = Build();
+        var report = service.ArrangeIntoFence(new RectI(0, 0, 1000, 600), 5, FenceSortMode.Name);
+
+        string TitleOf(DesktopIcon icon) =>
+            BoxGrouping.FromEntry(new SoftwareGroupingConfig(), icon.Name, icon.Path, null).Title;
+        var boxRows = report
+            .GroupBy(r => TitleOf(r.Icon))
+            .Where(g => g.Count() > 0)
+            .Select(g => (Title: g.Key, MinY: g.Min(r => r.Target.Y), MaxY: g.Max(r => r.Target.Y)))
+            .OrderBy(b => b.MinY)
+            .ToList();
+
+        // Fixture sanity: two distinct boxes really did stack vertically (upper bottom above lower top),
+        // or the phase assertion below would pass over an unrelated pair.
+        Assert.True(boxRows.Count >= 2, $"expected >=2 stacked boxes, got {boxRows.Count}");
+        for (var i = 1; i < boxRows.Count; i++)
+        {
+            var (upper, lower) = (boxRows[i - 1], boxRows[i]);
+            Assert.True(upper.MaxY < lower.MinY,
+                $"boxes '{upper.Title}' and '{lower.Title}' are not vertically stacked");
+
+            var pitch = lower.MinY - upper.MaxY;
+            Assert.Equal(0, pitch % provider.IconSpacingY); // same lattice phase → rigid snapping
+            Assert.True(pitch >= 2 * provider.IconSpacingY, // at least one empty row between boxes
+                $"'{lower.Title}' first row only {pitch}px below '{upper.Title}' last row — title band will overlap");
+        }
+    }
+
     [Fact]
     public void ArrangeOneFence_UnknownTitle_ReturnsEmptyWithoutMovingAnything()
     {

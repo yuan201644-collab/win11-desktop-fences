@@ -85,7 +85,13 @@ public sealed class DesktopLayoutService
         var cellH = _provider.IconSpacingY;
         var headerPx = FenceHeader.HeaderPx;
         const int FenceGapX = 24;
-        const int FenceGapY = 20;
+        // Vertical gap is lattice-derived, not aesthetic: box N+1's icon rows must share box N's
+        // lattice phase (headerPx + gap ≡ 0 mod cellH). Otherwise Explorer's per-coordinate
+        // lattice snapping can pull the lower box's first row onto the pitch right below the
+        // upper box's last row, and its 34px title band overlaps that row by ~38px (the
+        // first-arrange "title overlaps the box above" bug, 2026-09-08). 82−34=48 on the real
+        // grid; derived here so any other spacing keeps the invariant.
+        var fenceGapY = cellH - headerPx % cellH;
 
         // Compact "fence" packaging: each kind packs into its own tight box whose size comes
         // from its own icon count (few columns, so the box hugs its contents and reads as a
@@ -126,7 +132,7 @@ public sealed class DesktopLayoutService
                 var y = Math.Clamp(cursorY + headerPx + (i / cols) * cellH, top, Math.Max(top, bottom - cellH));
                 targets.Add(new PointI(x, y));
             }
-            cursorY += fenceHeight + FenceGapY;
+            cursorY += fenceHeight + fenceGapY;
         }
 
         var report = new List<(DesktopIcon, Category, PointI)>();
