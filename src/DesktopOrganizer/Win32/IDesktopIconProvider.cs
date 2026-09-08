@@ -28,6 +28,12 @@ public interface IDesktopIconProvider : IDisposable
     /// phase-independent (every on-lattice start point moves by the same snapped delta).</summary>
     bool TryGetLatticeCell(out int cellCx, out int cellCy);
 
+    /// <summary>Reports the desktop's icon-grid pitch AND phase (origin) when known. The auto
+    /// packer uses it to place every icon target exactly on the lattice, so Explorer's
+    /// per-write snapping becomes identity — no half-cell drift, no edge overflow.
+    /// False (unknown) means the packer falls back to raw coordinates.</summary>
+    bool TryGetLattice(out int cellCx, out int cellCy, out int originX, out int originY);
+
     /// <summary>Attempts to re-acquire the desktop hook after it went stale (an Explorer restart
     /// invalidates the cached window handle and the cross-process channel). Returns true when the
     /// provider is available again. A provider that never went stale should return its current

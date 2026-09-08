@@ -123,44 +123,83 @@ public class DesktopLayoutServiceTests
     }
 
     /// <summary>
-    /// Regression (2026-09-08 first-arrange title overlap): two vertically stacked boxes must keep
-    /// the SAME lattice phase — the row pitch between the upper box's last row and the lower box's
-    /// first row must be a whole multiple of the cell height. Explorer snaps each written
-    /// coordinate to the lattice independently, so a non-multiple raw distance (the old
-    /// FenceGapY=20 gave 136 = 82+54 on the real grid) lets the lower box's rows snap up onto the
-    /// pitch right below the upper box's last row; its 34px title band then overlaps that row.
-    /// Reverse-verified: with FenceGapY=20 this test fails (diff % cellH == 54).
+    /// Regression (2026-09-08): with the grid known, EVERY arranged target must sit exactly on
+    /// the lattice (origin + k·pitch) — Explorer's per-write snapping then becomes identity, so
+    /// no half-cell drift can push edge icons off-screen or tilt one box's phase against
+    /// another's (the first-arrange title-overlap bug). Uses a non-zero phase to prove targets
+    /// land on origin + k·pitch, not merely on pitch multiples.
     /// </summary>
     [Fact]
-    public void ArrangeIntoFence_StackedBoxes_ShareLatticePhase_NoTitleOverlap()
+    public void ArrangeIntoFence_LatticeAligned_TargetsOnGrid()
+    {
+        var (provider, service) = Build();
+        provider.FakeGridCx = 96;
+        provider.FakeGridCy = 96;
+        provider.FakeGridOx = 22;
+        provider.FakeGridOy = 34;
+
+        var fence = new RectI(0, 0, 1000, 600);
+        var report = service.ArrangeIntoFence(fence, 5, FenceSortMode.Name);
+        Assert.NotEmpty(report);
+
+        foreach (var (_, _, target) in report)
+        {
+            Assert.Equal(0, (target.X - 22) % 96);
+            Assert.Equal(0, (target.Y - 34) % 96);
+            Assert.True(target.X + 96 <= fence.Right, $"x={target.X} cell crosses the right edge");
+            Assert.True(target.Y + 96 <= fence.Bottom, $"y={target.Y} cell crosses the bottom edge");
+        }
+    }
+
+    /// <summary>Row-major shelf: two small boxes with room to spare must sit SIDE BY SIDE in one
+    /// row (the old column-major packer stacked them vertically, wasting the wide dimension).</summary>
+    [Fact]
+    public void ArrangeIntoFence_RowMajor_SideBySide_WhenRoomAllows()
     {
         var (provider, service) = Build();
         var report = service.ArrangeIntoFence(new RectI(0, 0, 1000, 600), 5, FenceSortMode.Name);
 
-        string TitleOf(DesktopIcon icon) =>
-            BoxGrouping.FromEntry(new SoftwareGroupingConfig(), icon.Name, icon.Path, null).Title;
-        var boxRows = report
-            .GroupBy(r => TitleOf(r.Icon))
-            .Where(g => g.Count() > 0)
-            .Select(g => (Title: g.Key, MinY: g.Min(r => r.Target.Y), MaxY: g.Max(r => r.Target.Y)))
-            .OrderBy(b => b.MinY)
-            .ToList();
-
-        // Fixture sanity: two distinct boxes really did stack vertically (upper bottom above lower top),
-        // or the phase assertion below would pass over an unrelated pair.
-        Assert.True(boxRows.Count >= 2, $"expected >=2 stacked boxes, got {boxRows.Count}");
-        for (var i = 1; i < boxRows.Count; i++)
+        var boxes = BoxesByTitle(report);
+        Assert.True(boxes.Count >= 2, $"expected >=2 boxes, got {boxes.Count}");
+        var first = boxes[0];
+        foreach (var other in boxes.Skip(1))
         {
-            var (upper, lower) = (boxRows[i - 1], boxRows[i]);
-            Assert.True(upper.MaxY < lower.MinY,
-                $"boxes '{upper.Title}' and '{lower.Title}' are not vertically stacked");
-
-            var pitch = lower.MinY - upper.MaxY;
-            Assert.Equal(0, pitch % provider.IconSpacingY); // same lattice phase → rigid snapping
-            Assert.True(pitch >= 2 * provider.IconSpacingY, // at least one empty row between boxes
-                $"'{lower.Title}' first row only {pitch}px below '{upper.Title}' last row — title band will overlap");
+            Assert.Equal(first.MinY, other.MinY); // same icon row → same row-of-boxes
+            Assert.True(other.MinX > first.MaxX, "boxes must not overlap horizontally");
         }
     }
+
+    /// <summary>When the row runs out of width the next box wraps down, and the vertical pitch
+    /// between the upper box's last icon row and the lower box's first icon row must be whole
+    /// cells with at least one empty grid row between them (rendered title bands then never touch).</summary>
+    [Fact]
+    public void ArrangeIntoFence_RowWrap_VerticalGapIsWholeCells()
+    {
+        var (provider, service) = Build();
+        var report = service.ArrangeIntoFence(new RectI(0, 0, 300, 600), 5, FenceSortMode.Name);
+
+        var boxes = BoxesByTitle(report);
+        Assert.True(boxes.Count >= 2, $"expected >=2 boxes, got {boxes.Count}");
+        for (var i = 1; i < boxes.Count; i++)
+        {
+            var (upper, lower) = (boxes[i - 1], boxes[i]);
+            Assert.True(upper.MaxY < lower.MinY, "boxes must not overlap vertically");
+            var pitch = lower.MinY - upper.MaxY;
+            Assert.Equal(0, pitch % provider.IconSpacingY);
+            Assert.True(pitch >= 2 * provider.IconSpacingY,
+                $"only {pitch}px below the upper box's last row — title band would overlap");
+        }
+    }
+
+    private static List<(string Title, int MinX, int MaxX, int MinY, int MaxY)> BoxesByTitle(
+        IReadOnlyList<(DesktopIcon Icon, Category Category, PointI Target)> report)
+        => report
+            .GroupBy(r => BoxGrouping.FromEntry(new SoftwareGroupingConfig(), r.Icon.Name, r.Icon.Path, null).Title)
+            .Select(g => (Title: g.Key,
+                MinX: g.Min(r => r.Target.X), MaxX: g.Max(r => r.Target.X),
+                MinY: g.Min(r => r.Target.Y), MaxY: g.Max(r => r.Target.Y)))
+            .OrderBy(b => b.MinY).ThenBy(b => b.MinX)
+            .ToList();
 
     [Fact]
     public void ArrangeOneFence_UnknownTitle_ReturnsEmptyWithoutMovingAnything()

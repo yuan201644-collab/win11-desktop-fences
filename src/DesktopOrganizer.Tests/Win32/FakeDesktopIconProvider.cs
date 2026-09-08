@@ -42,6 +42,20 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
         return cellCx > 0 && cellCy > 0;
     }
 
+    // Grid phase for the auto packer's lattice-aligned layout (default 0,0; unknown until the
+    // pitch is set). Setting a non-zero phase lets a test prove targets land on origin + k*pitch,
+    // not merely on pitch multiples.
+    public int FakeGridOx { get; set; }
+    public int FakeGridOy { get; set; }
+    public bool TryGetLattice(out int cellCx, out int cellCy, out int originX, out int originY)
+    {
+        cellCx = FakeGridCx;
+        cellCy = FakeGridCy;
+        originX = FakeGridOx;
+        originY = FakeGridOy;
+        return cellCx > 0 && cellCy > 0;
+    }
+
     // Test control: the fake desktop never has auto-arrange on by default, and "disabling" it is a no-op.
     public bool IsAutoArrangeOn { get; set; }
     // Lets a test simulate auto-arrange that CANNOT be turned off (the real Windows shell sometimes

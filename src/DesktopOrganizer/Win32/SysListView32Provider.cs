@@ -290,6 +290,17 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
         return _gridKnown && cellCx > 0 && cellCy > 0;
     }
 
+    /// <summary>Pitch + phase for the auto packer's lattice-aligned layout. Same authority as
+    /// <see cref="TryGetLatticeCell"/> (readback-corrected phase); false while unknown.</summary>
+    public bool TryGetLattice(out int cellCx, out int cellCy, out int originX, out int originY)
+    {
+        cellCx = _gridCx;
+        cellCy = _gridCy;
+        originX = _gridOx;
+        originY = _gridOy;
+        return _gridKnown && cellCx > 0 && cellCy > 0;
+    }
+
     private void RefreshGridSpacing()
     {
         try

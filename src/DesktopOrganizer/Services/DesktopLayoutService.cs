@@ -84,55 +84,61 @@ public sealed class DesktopLayoutService
         var cellW = _provider.IconSpacingX;
         var cellH = _provider.IconSpacingY;
         var headerPx = FenceHeader.HeaderPx;
-        const int FenceGapX = 24;
-        // Vertical gap is lattice-derived, not aesthetic: box N+1's icon rows must share box N's
-        // lattice phase (headerPx + gap ≡ 0 mod cellH). Otherwise Explorer's per-coordinate
-        // lattice snapping can pull the lower box's first row onto the pitch right below the
-        // upper box's last row, and its 34px title band overlaps that row by ~38px (the
-        // first-arrange "title overlaps the box above" bug, 2026-09-08). 82−34=48 on the real
-        // grid; derived here so any other spacing keeps the invariant.
-        var fenceGapY = cellH - headerPx % cellH;
 
-        // Compact "fence" packaging: each kind packs into its own tight box whose size comes
-        // from its own icon count (few columns, so the box hugs its contents and reads as a
-        // tidy container, not a wide strip). Fences stack vertically and wrap to a new column
-        // when the next would run past the bottom of the screen. That, plus per-icon clamping,
-        // keeps every icon on the primary display and boxes non-overlapping by construction.
-        var top = fence.Y; var left = fence.X; var right = fence.Right; var bottom = fence.Bottom;
-        var availableH = Math.Max(1, fence.Height);
-        var maxRowsPerFence = Math.Max(3, availableH / Math.Max(1, cellH) - 1);
+        // Lattice-aligned row-major packing. When the grid is known, the whole layout is computed
+        // in ICON-CELL coordinates: cursors start on the lattice and every step is a whole number
+        // of cells, so every icon target IS a lattice point — Explorer's per-write snapping
+        // becomes identity (no half-cell drift, no edge overflow; even the clamp boundaries are
+        // lattice points, so clamping can never knock a target off the grid). Boxes flow
+        // left→right and wrap to the next row (text-wrap style), separated by exactly one empty
+        // grid column / row — which is the smallest lattice-exact gap there is.
+        var hasLattice = _provider.TryGetLattice(out var gridCx, out var gridCy, out var gridOx, out var gridOy);
+        static int CeilToLattice(int v, int pitch, int origin)
+            => pitch > 0 ? origin + (int)Math.Ceiling((v - origin) / (double)pitch) * pitch : v;
+        static int FloorToLattice(int v, int pitch, int origin)
+            => pitch > 0 ? origin + (int)Math.Floor((v - origin) / (double)pitch) * pitch : v;
+
+        var left = hasLattice ? CeilToLattice(fence.Left, gridCx, gridOx) : fence.Left;
+        var maxX = hasLattice ? FloorToLattice(fence.Right - cellW, gridCx, gridOx) : fence.Right - cellW;
+        // The first ICON row sits below the reserved title band, and IT is the lattice anchor —
+        // the box's own top (iconY − headerPx) then stays inside the layout rect, so the drag
+        // release's ClampFenceRect never shifts a bare-click restore (first-arrange regression).
+        var top = hasLattice ? CeilToLattice(fence.Top + headerPx, gridCy, gridOy) : fence.Top + headerPx;
+        var maxY = hasLattice ? FloorToLattice(fence.Bottom - cellH, gridCy, gridOy) : fence.Bottom - cellH;
+        var maxRowsPerFence = Math.Max(3, fence.Height / Math.Max(1, cellH) - 1);
 
         // items is sorted by box order, so grouping by box title preserves that order and
         // concatenating the groups reproduces `items` — targets line up with `items[i]` below.
         var groups = sortedItems.GroupBy(x => x.Box.Title).Select(g => g.ToList()).ToList();
         var targets = new List<PointI>(sortedItems.Count);
-        var cursorX = left; var cursorY = top; var columnMaxW = 0;
 
+        var cursorX = left;
+        var iconY = top;      // y of the current row-of-boxes' first ICON row (lattice point)
+        var rowRows = 0;      // tallest box's row count in the current row-of-boxes
         foreach (var group in groups)
         {
             var count = group.Count;
             var cols = PackColumns(count, maxRowsPerFence);
             var rows = Math.Max(1, (int)Math.Ceiling(count / (double)cols));
-            var fenceWidth = cols * cellW;
-            var fenceHeight = headerPx + rows * cellH;
+            var width = cols * cellW;
 
-            // Wrap to a new column when this fence wouldn't fit under the ones above it.
-            if (cursorY > top && cursorY + fenceHeight > bottom)
+            // Wrap to the next row when this box would run past the right edge (at least one
+            // box per row, even one wider than the layout — its columns then clamp inward).
+            if (cursorX > left && cursorX + width > fence.Right)
             {
-                cursorX += columnMaxW + FenceGapX;
-                cursorY = top;
-                columnMaxW = 0;
+                cursorX = left;
+                iconY += rowRows * cellH + cellH; // one empty grid row between stacked boxes
+                rowRows = 0;
             }
-            columnMaxW = Math.Max(columnMaxW, fenceWidth);
+            rowRows = Math.Max(rowRows, rows);
 
             for (var i = 0; i < count; i++)
             {
-                // Icons start below the reserved title band, rounded/clamped to the fence.
-                var x = Math.Clamp(cursorX + (i % cols) * cellW, left, Math.Max(left, right - cellW));
-                var y = Math.Clamp(cursorY + headerPx + (i / cols) * cellH, top, Math.Max(top, bottom - cellH));
+                var x = Math.Clamp(cursorX + (i % cols) * cellW, left, Math.Max(left, maxX));
+                var y = Math.Clamp(iconY + (i / cols) * cellH, top, Math.Max(top, maxY));
                 targets.Add(new PointI(x, y));
             }
-            cursorY += fenceHeight + fenceGapY;
+            cursorX += width + cellW; // one empty grid column between side-by-side boxes
         }
 
         var report = new List<(DesktopIcon, Category, PointI)>();
