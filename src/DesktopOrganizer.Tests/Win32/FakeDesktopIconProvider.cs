@@ -17,9 +17,17 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
     // Project each icon's current position from the recorded store so callers (and the controller's
     // collapse/expand orchestration) observe parked/restored positions the same way the real provider
     // re-reads live desktop state on every GetIcons() call.
-    public IReadOnlyList<DesktopIcon> GetIcons() =>
-        Icons.Select(ic => new DesktopIcon(ic.Index, ic.Name, ic.Path,
+    //
+    // GetIconsCalls counts those enumerations: each one is a full cross-process walk of the desktop
+    // ListView on the real machine, so a regression test can pin "an arrange enumerates the desktop a
+    // constant number of times, NOT once per pinned box" (2026-09-10 整理卡死).
+    public int GetIconsCalls { get; private set; }
+    public IReadOnlyList<DesktopIcon> GetIcons()
+    {
+        GetIconsCalls++;
+        return Icons.Select(ic => new DesktopIcon(ic.Index, ic.Name, ic.Path,
             _pos.TryGetValue(ic.Index, out var p) ? p : ic.Position)).ToList();
+    }
     public PointI GetPosition(int index) => _pos.TryGetValue(index, out var p) ? p : new PointI(0, 0);
     public void SetPosition(int index, PointI position) => _pos[index] = SetPositionSnapHook?.Invoke(position) ?? position;
 

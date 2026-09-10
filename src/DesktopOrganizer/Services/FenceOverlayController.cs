@@ -451,26 +451,27 @@ public sealed class FenceOverlayController : IDisposable
         // Row budget matches the inset layout rect (minus LayoutMargin top/bottom) so icons
         // never overflow the visible desktop area.
         var maxRows = Math.Max(1, (h - LayoutMargin * 2) / Math.Max(1, spacingY));
+        ArrangeOutcome outcome;
         try
         {
-            // Boxes with a pinned rectangle keep their shape: the auto packer skips their icons and
-            // each pinned box lays its own icons out afterwards. Everything else auto-packs as before.
-            var pinned = _fenceLayouts.Keys.ToList();
-            _layout.ArrangeIntoFence(
+            // One pass for the whole desktop: the auto packer takes every box that is not pinned and
+            // each pinned box lays its own icons into its stored rectangle — from the SAME classified
+            // snapshot. Doing this per pinned box (the old ArrangeIntoFence + ArrangeOneFence loop)
+            // re-classified all 126 icons once per box, which is what froze the UI on 2026-09-10.
+            //
+            // A pinned rect is clamped into the virtual desktop BEFORE anything is laid out: the
+            // per-icon clamp only knows the box's own bounds, so a rect hanging past the bottom edge
+            // (dragged there earlier, or left behind by a display change) would park its icons
+            // off-screen — invisible, yet re-rescued by RescueStrandedIcons on every refresh, an
+            // endless rescue/refresh loop that makes the icons look like they vanished.
+            var pinnedRects = _fenceLayouts.ToDictionary(
+                kv => kv.Key,
+                kv => ClampFenceRect(new RectI(kv.Value.X, kv.Value.Y, kv.Value.Width, kv.Value.Height)),
+                StringComparer.OrdinalIgnoreCase);
+            var virtualScreen = VirtualScreen() ?? new RectI(0, 0, w, h);
+            outcome = _layout.ArrangeAll(
                 new RectI(x + LayoutMargin, y + LayoutMargin, w - LayoutMargin * 2, h - LayoutMargin * 2),
-                maxRows, _sortMode, skipTitles: pinned);
-            foreach (var title in pinned)
-                if (_fenceLayouts.TryGetValue(title, out var fl))
-                {
-                    // A pinned box must be clamped into the virtual desktop BEFORE its icons are
-                    // laid out. ArrangeOneFence only clamps each icon to the box's own bounds, so a
-                    // pinned rect hanging past the bottom edge (dragged/resized there earlier, or
-                    // left behind by a display change) would place its icons off-screen: invisible
-                    // to the user, yet re-rescued by RescueStrandedIcons on every refresh — an
-                    // endless rescue/refresh loop that makes the icons look like they vanished.
-                    _layout.ArrangeOneFence(
-                        title, ClampFenceRect(new RectI(fl.X, fl.Y, fl.Width, fl.Height)), _sortMode);
-                }
+                maxRows, _sortMode, pinnedRects, virtualScreen);
         }
         catch (DesktopAutoArrangeException)
         {
@@ -483,8 +484,31 @@ public sealed class FenceOverlayController : IDisposable
             return;
         }
 
+        // Adopt the rectangles the arrange actually used. A pinned box that could not hold its icons
+        // grew to fit (anchored at its top-left); persisting that stops it from growing again on the
+        // next 整理 — and stops the overflow icons from piling onto one cell.
+        var grew = false;
+        foreach (var (title, used) in outcome.FenceRects)
+            if (_fenceLayouts.TryGetValue(title, out var fl) &&
+                (fl.X != used.X || fl.Y != used.Y || fl.Width != used.Width || fl.Height != used.Height))
+            {
+                _fenceLayouts[title] = new FenceLayout(used.X, used.Y, used.Width, used.Height, fl.Locked);
+                grew = true;
+            }
+        if (grew) SaveFenceLayouts();
+
+        // The overlay labels come from the arrange's own classification — no second full pass.
+        if (_titleResolver is null && outcome.Entries.Count > 0)
+        {
+            _groupTitle.Clear();
+            foreach (var e in outcome.Entries) _groupTitle[e.Icon.Name] = e.Title;
+        }
+        else
+        {
+            RebuildGroupTitles();
+        }
+
         _arranged = true;
-        RebuildGroupTitles();
         StartOverlayTimer();
         RefreshOverlay();
         SaveLayout();

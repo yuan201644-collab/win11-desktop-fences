@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using DesktopOrganizer.Core.Classification;
@@ -209,5 +210,82 @@ public class DesktopLayoutServiceTests
 
         Assert.Empty(service.ArrangeOneFence("不存在的框", new RectI(100, 100, 400, 300)));
         foreach (var (i, p) in before) Assert.Equal(p, provider.GetPosition(i));
+    }
+
+    /// <summary>
+    /// Regression (2026-09-10 整理卡死): one arrange must enumerate the desktop a CONSTANT number of
+    /// times. The old call path ran <c>ArrangeOneFence</c> per pinned box, and each of those called
+    /// <c>GetIcons()</c> + <c>ClassifyAll(whole desktop)</c> again — N enumerations and N full
+    /// classification passes for N pinned boxes (11 boxes × 126 icons looked like a freeze, each
+    /// classification hitting the shell once per shortcut). Reverse-verified: restoring that loop
+    /// makes this test fail with calls == 1 + pinnedRects.Count.
+    /// </summary>
+    [Fact]
+    public void ArrangeAll_EnumeratesTheDesktopOnce_NoMatterHowManyPinnedBoxes()
+    {
+        var (provider, service) = Build();
+        var pinned = new Dictionary<string, RectI>
+        {
+            ["文件夹"] = new RectI(100, 100, 480, 260),
+            ["文件"] = new RectI(700, 100, 480, 260),
+            ["其他"] = new RectI(100, 500, 480, 260),
+        };
+
+        var outcome = service.ArrangeAll(
+            new RectI(0, 0, 1600, 1000), 5, FenceSortMode.Name, pinned, new RectI(0, 0, 1920, 1080));
+
+        Assert.NotEmpty(outcome.Entries);
+        Assert.True(provider.GetIconsCalls <= 2,
+            $"arrange enumerated the desktop {provider.GetIconsCalls} times with {pinned.Count} pinned boxes");
+        // Every icon still gets exactly one placement, auto-packed or pinned.
+        Assert.Equal(provider.Icons.Count, outcome.Entries.Count);
+    }
+
+    /// <summary>
+    /// Regression (the pile-up the user saw): a pinned rectangle that cannot hold its icons must GROW,
+    /// not clamp the overflow onto the last cell. 文件夹 owns 4 icons; 80×170 holds exactly one cell at
+    /// the fake 96px pitch, so the old arrange stacked all four on one point (real machine: 其他软件
+    /// 94×131 held Terraria.url + To the Moon.url + 桌面图标整理 on a single lattice point).
+    /// Reverse-verified: with <c>grow: false</c> the distinct-position assertion fails.
+    /// </summary>
+    [Fact]
+    public void ArrangeAll_PinnedBoxTooSmall_GrowsToFit_SoNoTwoIconsShareACell()
+    {
+        var (provider, service) = Build();
+        var tooSmall = new RectI(100, 100, 80, 170);
+        var pinned = new Dictionary<string, RectI> { ["文件夹"] = tooSmall };
+
+        var outcome = service.ArrangeAll(
+            new RectI(0, 0, 1600, 1000), 5, FenceSortMode.Name, pinned, new RectI(0, 0, 1920, 1080));
+
+        var used = outcome.FenceRects["文件夹"];
+        Assert.True(used.Width > tooSmall.Width || used.Height > tooSmall.Height,
+            $"pinned rect was not grown ({used.Width}x{used.Height}) — overflow icons would pile up");
+        Assert.Equal(tooSmall.X, used.X); // the box keeps the position the user chose
+        Assert.Equal(tooSmall.Y, used.Y);
+
+        var placed = outcome.Entries.Where(e => e.Title == "文件夹").ToList();
+        Assert.Equal(4, placed.Count);
+        Assert.Equal(placed.Count, placed.Select(e => e.Target).Distinct().Count());
+        Assert.All(placed, e =>
+        {
+            Assert.InRange(e.Target.X, used.Left, used.Right - 96);
+            Assert.InRange(e.Target.Y, used.Top, used.Bottom - 96);
+        });
+    }
+
+    /// <summary>A pinned box with room to spare must come back byte-identical — the arrange must not
+    /// churn the geometry the user dragged out.</summary>
+    [Fact]
+    public void ArrangeAll_PinnedBoxBigEnough_KeepsItsStoredRectangle()
+    {
+        var (provider, service) = Build();
+        var roomy = new RectI(300, 300, 480, 400);
+        var pinned = new Dictionary<string, RectI> { ["文件夹"] = roomy };
+
+        var outcome = service.ArrangeAll(
+            new RectI(0, 0, 1600, 1000), 5, FenceSortMode.Name, pinned, new RectI(0, 0, 1920, 1080));
+
+        Assert.Equal(roomy, outcome.FenceRects["文件夹"]);
     }
 }
