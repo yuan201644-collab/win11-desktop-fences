@@ -1,19 +1,29 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace DesktopOrganizer.Core.Layout;
 
 /// <summary>
-/// A user-pinned rectangle for one fence box (screen pixels). When present, the layout engine
-/// arranges that box's icons inside this rectangle instead of auto-packing them — so a box the
-/// user resized or moved keeps its shape across re-arranges and restarts. Absent entries mean
-/// "auto pack with the rest". <paramref name="Locked"/> additionally freezes the box: a locked
-/// box refuses drag and resize (its icons still re-pack inside it on every arrange).
+/// A remembered rectangle for one fence box (screen pixels). When present, the layout engine
+/// arranges that box's icons inside this rectangle instead of auto-packing them. Absent entries
+/// mean "auto pack with the rest".
+///
+/// Two orthogonal flags refine what "remembered" means:
+/// <list type="bullet">
+/// <item><paramref name="Locked"/> freezes the box — it refuses drag and resize (its icons still
+/// re-pack inside it on every arrange). A deliberate, hard decision.</item>
+/// <item><paramref name="Transient"/> marks an incidental placement: a drag or resize remembers
+/// the box only for the rest of the session, so the next 整理 drops it and the box re-joins the
+/// auto pack. It is never persisted — <see cref="FenceLayoutStore.Save"/> filters it out. Clicking
+/// the pin badge promotes a transient box to a real pin (the user said "keep this").</item>
+/// </list>
 /// </summary>
-/// <remarks>Optional so files written by older builds (no <c>locked</c> property) load as unlocked.</remarks>
-public sealed record FenceLayout(int X, int Y, int Width, int Height, bool Locked = false);
+/// <remarks>Optional so files written by older builds (no <c>locked</c>/<c>transient</c> property)
+/// load as a plain, non-transient pin.</remarks>
+public sealed record FenceLayout(int X, int Y, int Width, int Height, bool Locked = false, bool Transient = false);
 
 /// <summary>
 /// The three states a box can be in, cycled by clicking the header badge:
@@ -47,9 +57,16 @@ public static class FenceLayoutStore
         var dir = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
+        // Transient rectangles (a drag/resize remembered for this session only) are deliberately NOT
+        // persisted: only a real pin — the user clicked the badge — survives a restart. Filtering on
+        // write (rather than at the call site) keeps that rule in one place.
+        var persistable = layout
+            .Where(kv => !kv.Value.Transient)
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+
         // Write to a temp file then move so a crash mid-write never corrupts the last good layout.
         var tmp = filePath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(layout, Options));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(persistable, Options));
         File.Move(tmp, filePath, overwrite: true);
     }
 

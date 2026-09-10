@@ -355,6 +355,11 @@ public sealed class FenceOverlayController : IDisposable
     /// menu can be placed at the click point.</summary>
     public event Action<string, int, int>? FenceContextMenu;
 
+    /// <summary>Raised after an arrange could not place some icons because the remembered boxes left
+    /// no free cell — the argument is how many kept their old position. The window turns this into a
+    /// tray balloon with a concrete suggestion; the icons themselves are never stacked.</summary>
+    public event Action<int>? ArrangeSpaceShortage;
+
     /// <summary>
     /// Swaps in a user-edited grouping config, persists it, and redraws the box titles immediately.
     /// Does NOT re-arrange icon positions — call <see cref="ArrangeAndShow"/> first for new boxes to land.
@@ -454,6 +459,12 @@ public sealed class FenceOverlayController : IDisposable
         ArrangeOutcome outcome;
         try
         {
+            // 整理 is the user's "put everything back" action, so a TRANSIENT placement (a box the
+            // drag/resize only remembered for this session) is dropped here and re-joins the auto
+            // pack. Only an explicit pin — badge click or settings — survives an arrange.
+            foreach (var t in _fenceLayouts.Where(kv => kv.Value.Transient).Select(kv => kv.Key).ToList())
+                _fenceLayouts.Remove(t);
+
             // One pass for the whole desktop: the auto packer takes every box that is not pinned and
             // each pinned box lays its own icons into its stored rectangle — from the SAME classified
             // snapshot. Doing this per pinned box (the old ArrangeIntoFence + ArrangeOneFence loop)
@@ -492,10 +503,15 @@ public sealed class FenceOverlayController : IDisposable
             if (_fenceLayouts.TryGetValue(title, out var fl) &&
                 (fl.X != used.X || fl.Y != used.Y || fl.Width != used.Width || fl.Height != used.Height))
             {
-                _fenceLayouts[title] = new FenceLayout(used.X, used.Y, used.Width, used.Height, fl.Locked);
+                _fenceLayouts[title] = new FenceLayout(used.X, used.Y, used.Width, used.Height, fl.Locked, fl.Transient);
                 grew = true;
             }
         if (grew) SaveFenceLayouts();
+
+        // Remembered boxes left no free cell for some auto icons; they kept their position instead of
+        // stacking. Tell the window so it can offer a way out (balloon + suggestion) — a silent
+        // half-arrange would just look like the tool failed.
+        if (outcome.Unplaced.Count > 0) ArrangeSpaceShortage?.Invoke(outcome.Unplaced.Count);
 
         // The overlay labels come from the arrange's own classification — no second full pass.
         if (_titleResolver is null && outcome.Entries.Count > 0)
@@ -674,9 +690,13 @@ public sealed class FenceOverlayController : IDisposable
                 title, 0, new RectI(safeTab.X, safeTab.Y, Math.Max(24, safeTab.Width), Math.Max(1, safeTab.Height))));
         }
 
-        // Pinned titles ride along so each fence header can badge itself with the pin glyph.
+        // Pinned titles ride along so each fence header can badge itself with the pin glyph. A
+        // TRANSIENT placement is deliberately NOT in this set: the box keeps its dragged position for
+        // the session, but its badge stays the faded pin (Auto) — the honest signal that the next
+        // 整理 will re-pack it. Promoting it (badge click / settings) is what makes it a real pin.
+        var pinnedKeys = _fenceLayouts.Where(kv => !kv.Value.Transient).Select(kv => kv.Key).ToList();
         _host.Sync(clusters, FenceHeader.HeaderPx,
-            _fenceLayouts.Count > 0 ? (IReadOnlyCollection<string>)_fenceLayouts.Keys.ToList() : null,
+            pinnedKeys.Count > 0 ? pinnedKeys : null,
             _fenceLayouts.Count > 0
                 ? (IReadOnlyCollection<string>)_fenceLayouts.Where(kv => kv.Value.Locked).Select(kv => kv.Key).ToList()
                 : null);
@@ -961,7 +981,7 @@ public sealed class FenceOverlayController : IDisposable
             fl.Height + (target.Top - previous.Top) + (target.Bottom - previous.Bottom)));
         // Keep the lock flag: re-clamping / resizing / re-pinning a locked box must not quietly
         // unlock it (a display change must never relax a deliberate user decision).
-        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title));
+        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title), fl.Transient);
         SaveFenceLayouts();
     }
 
@@ -985,7 +1005,11 @@ public sealed class FenceOverlayController : IDisposable
             .ToList();
         _fenceColors.Clear();
         _fenceInsets.Clear();
-        _fenceLayouts.Clear();
+        // Colours and padding above always clear; a LOCKED box keeps its rectangle. Locking the box
+        // is a harder decision than remembering it, so a bulk reset must not silently unlock it —
+        // unlock it explicitly (badge / settings) first if that is really what you mean.
+        foreach (var t in _fenceLayouts.Where(kv => !kv.Value.Locked).Select(kv => kv.Key).ToList())
+            _fenceLayouts.Remove(t);
         foreach (var t in touched) _host.SetFenceAppearance(t, null);
         SaveFenceColors();
         SaveFenceInsets();
@@ -993,18 +1017,21 @@ public sealed class FenceOverlayController : IDisposable
         ForceRefresh();
     }
 
-    /// <summary>True when any box is pinned to a fixed rectangle (fence-layout.json has entries),
-    /// so the "all boxes back to auto layout" actions can hide themselves on a no-op desktop.</summary>
-    public bool AnyPinnedLayouts => _fenceLayouts.Count > 0;
+    /// <summary>True when any box holds a real (non-transient) rectangle, so the "all boxes back to
+    /// auto layout" actions can hide themselves on a no-op desktop. A transient placement does not
+    /// count — the next 整理 clears it anyway.</summary>
+    public bool AnyPinnedLayouts => _fenceLayouts.Any(kv => !kv.Value.Transient);
 
-    /// <summary>One-shot "all boxes back to their original (auto-packed) positions": unpins every
-    /// box so they all re-pack automatically on the next refresh. Per-box color and edge-padding
-    /// overrides are intentionally kept — position and appearance are managed separately; the
-    /// all-inclusive wipe is <see cref="ResetAllPersonalization"/>.</summary>
+    /// <summary>One-shot "all boxes back to their original (auto-packed) positions": drops every
+    /// non-locked remembered rectangle so those boxes re-pack automatically on the next refresh.
+    /// Per-box colour and edge-padding overrides are intentionally kept — position and appearance are
+    /// managed separately; the all-inclusive wipe is <see cref="ResetAllPersonalization"/>. A LOCKED
+    /// box is skipped: locking outranks clearing, so this never silently unlocks one.</summary>
     public void ResetAllFenceLayouts()
     {
-        if (_fenceLayouts.Count == 0) return;
-        _fenceLayouts.Clear();
+        var removable = _fenceLayouts.Where(kv => !kv.Value.Locked).Select(kv => kv.Key).ToList();
+        if (removable.Count == 0) return;
+        foreach (var t in removable) _fenceLayouts.Remove(t);
         SaveFenceLayouts();
         ForceRefresh();
     }
@@ -1048,9 +1075,13 @@ public sealed class FenceOverlayController : IDisposable
         _resizing = false;
         var final = _host.GetFenceBounds(title);
 
+        // A box the user never pinned only holds its new shape for the session (transient), exactly
+        // like a drag. An already-pinned box keeps its pin — resizing a fixed box just re-shapes it.
+        var transient = !_fenceLayouts.ContainsKey(title);
+
         if (parked && final is { } b)
         {
-            ApplyFenceLayout(title, b);
+            ApplyFenceLayout(title, b, transient);
             return;
         }
         if (parked)
@@ -1059,24 +1090,26 @@ public sealed class FenceOverlayController : IDisposable
             foreach (var (idx, start) in _resizeStart)
                 _provider.SetPosition(idx, start);
             _resizeStart = new Dictionary<int, PointI>();
-            PinCurrentBox(title);
+            PinCurrentBox(title, transient);
             SaveLayout();
             ForceRefresh();
             return;
         }
         // A resize of a box we never parked (no icons / unknown title): keep the old settle
-        // behavior — pin whatever rect the window ended at, or just refresh.
-        if (final is { } fb) ApplyFenceLayout(title, fb);
+        // behavior — remember whatever rect the window ended at, or just refresh.
+        if (final is { } fb) ApplyFenceLayout(title, fb, transient);
         else ForceRefresh();
     }
 
-    /// <summary>Pins a box to <paramref name="b"/> and re-lays-out its icons to fit the rectangle.</summary>
-    private void ApplyFenceLayout(string title, RectI b)
+    /// <summary>Remembers a box at <paramref name="b"/> and re-lays-out its icons to fit the
+    /// rectangle. <paramref name="transient"/> is true for the resize drag (an incidental placement
+    /// the next 整理 undoes) and false for the settings layout editor (an explicit pin).</summary>
+    private void ApplyFenceLayout(string title, RectI b, bool transient = false)
     {
         var clamped = ClampFenceRect(b);
         // Keep the lock flag: re-clamping / resizing / re-pinning a locked box must not quietly
         // unlock it (a display change must never relax a deliberate user decision).
-        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title));
+        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title), transient);
         try
         {
             _layout.ArrangeOneFence(title, clamped, _sortMode);
@@ -1959,13 +1992,19 @@ public sealed class FenceOverlayController : IDisposable
         if (live is null || live.Value != restored)
             _host.SetFenceBoundsAnimated(_dragTitle, restored, MagneticGlideMs);
 
-        // Pin what the user sees, so the next arrange keeps the box there instead of auto-packing
-        // it back into the crowd. A bare click (no movement — possible now that the park starts at
-        // press time) restores the icons untouched and must NOT newly pin an unpinned box: clicking
-        // a title is not a layout decision. An already-pinned box just re-pins the same rect.
+        // Remember what the user sees, so the next refresh keeps drawing the box there instead of
+        // snapping it back into the crowd. A bare click (no movement — possible now that the park
+        // starts at press time) restores the icons untouched and must NOT newly remember an
+        // unpinned box: clicking a title is not a layout decision. An already-pinned box just
+        // re-records the same rect.
         if (dActual.X != 0 || dActual.Y != 0 || _fenceLayouts.ContainsKey(title))
         {
-            PinBox(title, restored);
+            // A box the user has never pinned becomes a TRANSIENT placement: it holds its dragged
+            // spot for the session, but the next 整理 re-packs it (only a badge click makes a real
+            // pin). An already-pinned box keeps its own transiency — dragging a fixed box only moves it.
+            var transient = !_fenceLayouts.ContainsKey(title);
+            PinBox(title, restored, transient);
+            if (transient) _host.SetFencePinMode(title, FencePinMode.Auto); // badge: faded pin, not solid
             SaveLayout();
         }
         // Record the post-drag positions so the 2s tick sees no change and leaves every box alone.
@@ -2019,27 +2058,29 @@ public sealed class FenceOverlayController : IDisposable
 
     /// <summary>Pins <paramref name="title"/>'s current icon-derived box rectangle into the pinned
     /// layout (clamped), so drags survive re-arranges and restarts. Best-effort.</summary>
-    private void PinCurrentBox(string title)
+    private void PinCurrentBox(string title, bool transient = false)
     {
         if (IconBoxRect(title) is not { } b) return;
-        PinBox(title, b);
+        PinBox(title, b, transient);
     }
 
-    /// <summary>Stores <paramref name="rect"/> as <paramref name="title"/>'s pinned rectangle
-    /// (clamped to the screen), persisting it. Best-effort.</summary>
-    private void PinBox(string title, RectI rect)
+    /// <summary>Records <paramref name="rect"/> as <paramref name="title"/>'s rectangle (clamped to
+    /// the screen) and persists. <paramref name="transient"/> marks an incidental placement — a drag
+    /// or resize — which is kept for the session but filtered out of the saved file, so it is gone
+    /// after a restart and re-packed by the next 整理. Best-effort.</summary>
+    private void PinBox(string title, RectI rect, bool transient = false)
     {
         try
         {
             var clamped = ClampFenceRect(rect);
             // Keep the lock flag: re-clamping / resizing / re-pinning a locked box must not quietly
-        // unlock it (a display change must never relax a deliberate user decision).
-        _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title));
+            // unlock it (a display change must never relax a deliberate user decision).
+            _fenceLayouts[title] = new FenceLayout(clamped.X, clamped.Y, clamped.Width, clamped.Height, IsFenceLocked(title), transient);
             SaveFenceLayouts();
         }
         catch (Exception)
         {
-            // Best-effort: an un-pinned box simply auto-packs on the next arrange.
+            // Best-effort: an un-remembered box simply auto-packs on the next arrange.
         }
     }
 

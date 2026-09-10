@@ -158,7 +158,7 @@ public class FenceResizeTests
             Assert.Equal(ordered[i - 1].Position.Y, ordered[i].Position.Y);
         }
         // The final rect is pinned, so the next refresh cannot auto-pack the box away.
-        Assert.Equal(new FenceLayout(final.X, final.Y, final.Width, final.Height),
+        Assert.Equal(new FenceLayout(final.X, final.Y, final.Width, final.Height, Transient: true),
             f.Controller.GetFenceLayout(BoxA));
         // Other boxes untouched.
         foreach (var ic in IconsIn(f, BoxB))

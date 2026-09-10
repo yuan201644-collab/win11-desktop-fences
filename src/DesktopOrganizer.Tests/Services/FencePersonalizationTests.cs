@@ -480,4 +480,82 @@ public class FencePersonalizationTests
         Assert.False(f.Controller.AnyPinnedLayouts);
         Assert.Equal(6, f.Host.LastClusters.Sum(c => c.IconCount));
     }
+
+    /// <summary>A drag or resize only REMEMBERS a box for the session (transient): the next 整理
+    /// must drop it and re-pack the box with the rest. Only an explicit pin — the badge click or the
+    /// settings editor — survives an arrange. This is the "拖动改为临时摆放，而不是一次性定死"
+    /// contract. Reverse-verified: writing transient=false in OnDragEnded fails the Transient
+    /// assertion below (and the file assertion).</summary>
+    [Fact]
+    public void Arrange_DropsTransientPlacements_ButKeepsExplicitPins()
+    {
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+
+        // Drag box A — an incidental placement.
+        f.Host.FenceBoundsOverride = new RectI(300, 350, 420, 300);
+        f.Host.RaiseDragStarted(BoxA);
+        f.Host.FenceBoundsOverride = new RectI(440, 440, 420, 300);
+        f.Host.RaiseDragMoved(BoxA, 140, 90);
+        f.Host.RaiseDragEnded(BoxA);
+
+        var dragged = f.Controller.GetFenceLayout(BoxA);
+        Assert.NotNull(dragged);
+        Assert.True(dragged!.Transient, "a drag must be remembered as transient, not as a real pin");
+        // …and the badge was pushed back to the faded pin (Auto) instead of the solid one.
+        Assert.Contains((BoxA, FencePinMode.Auto), f.Host.PinModeToggles);
+        // A transient placement never reaches the file: only a real pin survives a restart.
+        Assert.DoesNotContain(BoxA, File.ReadAllText(Path.Combine(f.Scratch, "fence-layout.json")));
+
+        // Explicitly fix box B (the settings-editor path = a real pin).
+        f.Controller.SetFenceLayout(BoxB, new FenceLayout(1400, 200, 420, 300));
+        Assert.False(f.Controller.GetFenceLayout(BoxB)!.Transient);
+
+        f.Controller.ArrangeAndShow();
+
+        Assert.Null(f.Controller.GetFenceLayout(BoxA));    // cleared → the box re-packs with the rest
+        Assert.NotNull(f.Controller.GetFenceLayout(BoxB)); // a real pin survives the arrange
+    }
+
+    /// <summary>"取消所有框的固定" must skip LOCKED boxes: locking is a harder decision than pinning,
+    /// so a bulk clear must never silently unlock one (the user had no way to know). Unlock it from
+    /// the badge if that is really what they want.</summary>
+    [Fact]
+    public void ResetAllFenceLayouts_SkipsLockedBoxes()
+    {
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(200, 200, 420, 300));
+        f.Controller.SetFenceLocked(BoxA, true);
+        f.Controller.SetFenceLayout(BoxB, new FenceLayout(1200, 200, 420, 300));
+
+        f.Controller.ResetAllFenceLayouts();
+
+        var locked = f.Controller.GetFenceLayout(BoxA);
+        Assert.NotNull(locked);
+        Assert.True(locked!.Locked);
+        Assert.Null(f.Controller.GetFenceLayout(BoxB)); // the unlocked pin went back to auto
+        Assert.True(f.Controller.AnyPinnedLayouts);     // the locked one still counts as fixed
+    }
+
+    /// <summary>The all-inclusive reset clears colours and edge padding but leaves a LOCKED box's
+    /// rectangle alone — a lock outranks a reset, so "reset everything" cannot quietly unlock it.</summary>
+    [Fact]
+    public void ResetAllPersonalization_KeepsALockedRectangle_ButClearsColorsAndInsets()
+    {
+        var f = Build();
+        f.Controller.ArrangeAndShow();
+        f.Controller.SetFenceLayout(BoxA, new FenceLayout(200, 200, 420, 300));
+        f.Controller.SetFenceLocked(BoxA, true);
+        f.Controller.SetFenceAppearance(BoxA, OverlayAppearance.Default);
+        f.Controller.SetFenceInsets(BoxA, new FenceInsets(Left: 80, Right: 8, Top: 4, Bottom: 8));
+
+        f.Controller.ResetAllPersonalization();
+
+        var kept = f.Controller.GetFenceLayout(BoxA);
+        Assert.NotNull(kept);
+        Assert.True(kept!.Locked);
+        Assert.Null(f.Controller.GetFenceAppearance(BoxA));
+        Assert.Null(f.Controller.GetFenceInsets(BoxA));
+    }
 }

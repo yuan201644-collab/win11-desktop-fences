@@ -14,12 +14,15 @@ namespace DesktopOrganizer.Services;
 /// belongs to, and where its position was written.</summary>
 public sealed record ArrangeEntry(DesktopIcon Icon, Category Category, string Title, PointI Target);
 
-/// <summary>Everything one arrange produced: the placements in write order, and the rectangle every
+/// <summary>Everything one arrange produced: the placements in write order, the rectangle every
 /// pinned box actually used — which can be larger than the stored one when the box had to grow to
-/// hold its icons (see <see cref="DesktopLayoutService.ArrangeAll"/>).</summary>
+/// hold its icons (see <see cref="DesktopLayoutService.ArrangeAll"/>) — and the icons the auto
+/// packer could not place because the remembered boxes left no room. Those keep their current
+/// position (never stacked onto a shared cell) and are reported so the UI can suggest a fix.</summary>
 public sealed record ArrangeOutcome(
     IReadOnlyList<ArrangeEntry> Entries,
-    IReadOnlyDictionary<string, RectI> FenceRects);
+    IReadOnlyDictionary<string, RectI> FenceRects,
+    IReadOnlyList<DesktopIcon> Unplaced);
 
 public sealed class DesktopLayoutService
 {
@@ -110,13 +113,14 @@ public sealed class DesktopLayoutService
         if (!_provider.IsAvailable) return new List<(DesktopIcon, Category, PointI)>();
         DesktopShellEnumerator.ClearLinkTargetCache();
         var items = BuildItems(sort, skipTitles);
-        var targets = PackRowMajor(items, fence, maxRows);
+        var (placements, _) = PackRowMajor(items, fence, obstacles: null);
 
         var report = new List<(DesktopIcon, Category, PointI)>(items.Count);
-        for (var i = 0; i < items.Count; i++)
+        foreach (var (item, target) in placements)
         {
-            _provider.SetPosition(items[i].Icon.Index, targets[i]); // DesktopAutoArrangeException bubbles to caller
-            report.Add((items[i].Icon, items[i].Category, targets[i]));
+            if (target is not { } point) continue; // no room: leave it where it is
+            _provider.SetPosition(item.Icon.Index, point); // DesktopAutoArrangeException bubbles to caller
+            report.Add((item.Icon, item.Category, point));
         }
         return report;
     }
@@ -160,7 +164,11 @@ public sealed class DesktopLayoutService
     /// 整理 cost 2 + 2·(pinned boxes) full classification passes over every shortcut — the
     /// 2026-09-10 "整理卡死" incident had 11 pinned boxes and ~860 shell resolutions on the UI thread.
     /// </summary>
-    /// <param name="pinnedRects">Title → stored rectangle for every pinned box. A rectangle too
+    /// <remarks>Remembered boxes are laid out FIRST and their rectangles become obstacles for the
+    /// auto packer, so an auto box can never be dropped on top of one the user positioned. Auto
+    /// icons that find no free lattice cell keep their current position and are reported in
+    /// <see cref="ArrangeOutcome.Unplaced"/> — the arrange never stacks two icons on one cell.</remarks>
+    /// <param name="pinnedRects">Title → stored rectangle for every remembered box. A rectangle too
     /// small for its icons grows (anchored at its top-left, kept inside <paramref name="screen"/>)
     /// and the used rectangle comes back in the outcome so the caller can persist it.</param>
     public ArrangeOutcome ArrangeAll(
@@ -169,40 +177,59 @@ public sealed class DesktopLayoutService
     {
         var entries = new List<ArrangeEntry>();
         var rects = new Dictionary<string, RectI>(StringComparer.OrdinalIgnoreCase);
-        if (!_provider.IsAvailable) return new ArrangeOutcome(entries, rects);
+        var unplaced = new List<DesktopIcon>();
+        if (!_provider.IsAvailable) return new ArrangeOutcome(entries, rects, unplaced);
 
         // One resolution per shortcut per arrange: the memo is dropped here, then every lookup in
         // this pass (auto + pinned) hits it.
         DesktopShellEnumerator.ClearLinkTargetCache();
         var all = BuildItems(sort, skipTitles: null);
 
-        var autoItems = all.Where(i => !pinnedRects.ContainsKey(i.Title)).ToList();
-        var autoTargets = PackRowMajor(autoItems, fence, maxRows);
-        for (var i = 0; i < autoItems.Count; i++)
-        {
-            _provider.SetPosition(autoItems[i].Icon.Index, autoTargets[i]);
-            entries.Add(new ArrangeEntry(autoItems[i].Icon, autoItems[i].Category, autoItems[i].Title, autoTargets[i]));
-        }
-
+        // Pinned boxes first — their (possibly grown) rectangles are the obstacles the auto packer
+        // has to dodge. Laying them out before the auto pass is what keeps a remembered box from
+        // being covered by auto-packed icons.
+        var obstacles = new List<RectI>(pinnedRects.Count);
         foreach (var (title, rect) in pinnedRects)
         {
             var group = all.Where(i => string.Equals(i.Title, title, StringComparison.OrdinalIgnoreCase)).ToList();
+            RectI used;
             if (group.Count == 0)
             {
-                rects[title] = rect; // keep the stored rectangle; an empty box still renders at its shape
-                continue;
+                used = rect; // an empty box still renders at its shape, so it still reserves space
             }
-
-            var (targets, used) = PackInRect(group, rect, grow: true, screen);
-            rects[title] = used;
-            for (var i = 0; i < group.Count; i++)
+            else
             {
-                _provider.SetPosition(group[i].Icon.Index, targets[i]);
-                entries.Add(new ArrangeEntry(group[i].Icon, group[i].Category, group[i].Title, targets[i]));
+                var (targets, grown) = PackInRect(group, rect, grow: true, screen);
+                used = grown;
+                for (var i = 0; i < group.Count; i++)
+                {
+                    _provider.SetPosition(group[i].Icon.Index, targets[i]);
+                    entries.Add(new ArrangeEntry(group[i].Icon, group[i].Category, group[i].Title, targets[i]));
+                }
+            }
+            rects[title] = used;
+            obstacles.Add(used);
+        }
+
+        // Everything else packs into whatever the remembered boxes left free.
+        var autoItems = all.Where(i => !pinnedRects.ContainsKey(i.Title)).ToList();
+        var (placements, _) = PackRowMajor(autoItems, fence, obstacles);
+        foreach (var (item, target) in placements)
+        {
+            if (target is { } point)
+            {
+                _provider.SetPosition(item.Icon.Index, point);
+                entries.Add(new ArrangeEntry(item.Icon, item.Category, item.Title, point));
+            }
+            else
+            {
+                // No free cell: the icon keeps its current position and stays visible. Clamping it
+                // onto the last cell (the old behaviour) is what made icons pile into one blob.
+                unplaced.Add(item.Icon);
             }
         }
 
-        return new ArrangeOutcome(entries, rects);
+        return new ArrangeOutcome(entries, rects, unplaced);
     }
 
     /// <summary>
@@ -214,7 +241,12 @@ public sealed class DesktopLayoutService
     /// (text-wrap style), separated by exactly one empty grid column / row — the smallest
     /// lattice-exact gap there is.
     /// </summary>
-    private List<PointI> PackRowMajor(List<Item> items, RectI fence, int maxRows)
+    /// <param name="obstacles">Rectangles the auto packer must not cover — the remembered (pinned)
+    /// boxes, laid out before this pass. A candidate box that would overlap one is slid right one
+    /// cell at a time; when the row is exhausted the cursor wraps; when the bottom is reached the
+    /// group is left unplaced and its icons keep their current position (null target).</param>
+    private (List<(Item Item, PointI? Target)> Placements, List<Item> Unplaced) PackRowMajor(
+        List<Item> items, RectI fence, IReadOnlyList<RectI>? obstacles)
     {
         var cellW = _provider.IconSpacingX;
         var cellH = _provider.IconSpacingY;
@@ -235,10 +267,14 @@ public sealed class DesktopLayoutService
         var maxY = hasLattice ? FloorToLattice(fence.Bottom - cellH, gridCy, gridOy) : fence.Bottom - cellH;
         var maxRowsPerFence = Math.Max(3, fence.Height / Math.Max(1, cellH) - 1);
 
-        // items is sorted by box order, so grouping by box title preserves that order and
-        // concatenating the groups reproduces `items` — targets line up with `items[i]` below.
+        var blocked = obstacles is { Count: > 0 } ? obstacles : null;
+
+        // Group by box title; a group is placed as a unit. (The grouping is by title, NOT by
+        // position in `items`: two boxes can share an Order and interleave, so placements are
+        // recorded per ITEM rather than by index.) 
         var groups = items.GroupBy(x => x.Title).Select(g => g.ToList()).ToList();
-        var targets = new List<PointI>(items.Count);
+        var placements = new List<(Item, PointI?)>(items.Count);
+        var unplaced = new List<Item>();
 
         var cursorX = left;
         var iconY = top;      // y of the current row-of-boxes' first ICON row (lattice point)
@@ -249,30 +285,62 @@ public sealed class DesktopLayoutService
             var cols = PackColumns(count, maxRowsPerFence);
             var rows = Math.Max(1, (int)Math.Ceiling(count / (double)cols));
             var width = cols * cellW;
+            var height = headerPx + rows * cellH;
 
-            // Wrap when this box's last column would start past the rightmost LEGAL column (maxX).
-            // The bound is maxX + cellW (i.e. the box's far edge may reach the legal edge) rather than
-            // fence.Right, so the wrap never depends on how the caller rounded the fence. For
-            // lattice-aligned widths the two bounds are provably equivalent — width and cursorX are
-            // always whole cells apart, and fence.Right sits less than one cell past maxX + cellW —
-            // so this is a readability/clarity hardening, not a behaviour change.
-            if (cursorX > left && cursorX + width > maxX + cellW)
+            // Walk the cursor to the first spot this box fits: step right a cell while a remembered
+            // box is in the way, wrap to the next row band when the row is exhausted, and stop once
+            // the box's LAST ROW would fall past the layout rect (checking only the first row would
+            // let the last rows be clamped onto each other — the 6-icon pile this test caught).
+            var placed = false;
+            for (var guard = 0; guard < 100_000; guard++)
             {
-                cursorX = left;
-                iconY += rowRows * cellH + cellH; // one empty grid row between stacked boxes
-                rowRows = 0;
-            }
-            rowRows = Math.Max(rowRows, rows);
+                // Wrap when this box's last column would start past the rightmost LEGAL column
+                // (maxX): for lattice-aligned widths the far edge may reach maxX + cellW.
+                if (cursorX > left && cursorX + width > maxX + cellW)
+                {
+                    cursorX = left;
+                    iconY += rowRows * cellH + cellH; // one empty grid row between stacked boxes
+                    rowRows = 0;
+                }
+                // iconY−headerPx is the box top; the last icon row must still land inside the rect.
+                if (iconY + (rows - 1) * cellH > maxY) break;
 
-            for (var i = 0; i < count; i++)
-            {
-                var x = Math.Clamp(cursorX + (i % cols) * cellW, left, Math.Max(left, maxX));
-                var y = Math.Clamp(iconY + (i / cols) * cellH, top, Math.Max(top, maxY));
-                targets.Add(new PointI(x, y));
+                if (blocked is null
+                    || !OverlapsAny(new RectI(cursorX, iconY - headerPx, width, height), blocked))
+                {
+                    placed = true;
+                    break;
+                }
+                cursorX += cellW; // a remembered box is in the way — try the next column
             }
-            cursorX += width + cellW; // one empty grid column between side-by-side boxes
+
+            if (placed)
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    var x = Math.Clamp(cursorX + (i % cols) * cellW, left, Math.Max(left, maxX));
+                    var y = Math.Clamp(iconY + (i / cols) * cellH, top, Math.Max(top, maxY));
+                    placements.Add((group[i], new PointI(x, y)));
+                }
+                rowRows = Math.Max(rowRows, rows);
+                cursorX += width + cellW; // one empty grid column between side-by-side boxes
+            }
+            else
+            {
+                foreach (var item in group) { placements.Add((item, null)); unplaced.Add(item); }
+            }
         }
-        return targets;
+        return (placements, unplaced);
+    }
+
+    /// <summary>True when two rectangles intersect (touching edges do not count). The obstacle test
+    /// for the auto packer.</summary>
+    private static bool OverlapsAny(RectI box, IReadOnlyList<RectI> obstacles)
+    {
+        foreach (var o in obstacles)
+            if (box.Left < o.Right && o.Left < box.Right && box.Top < o.Bottom && o.Top < box.Bottom)
+                return true;
+        return false;
     }
 
     /// <summary>

@@ -155,7 +155,7 @@ public class FenceDragTests
         // The window was already where the cursor left it — no corrective snap was needed…
         Assert.Empty(f.Host.MovedBounds);
         // …and the drop rect is pinned, so the next refresh cannot auto-pack the box away.
-        Assert.Equal(new FenceLayout(440, 440, 420, 300), f.Controller.GetFenceLayout(BoxA));
+        Assert.Equal(new FenceLayout(440, 440, 420, 300, Transient: true), f.Controller.GetFenceLayout(BoxA));
         // Other boxes untouched.
         foreach (var ic in IconsIn(f, BoxB))
             Assert.Equal(othersBefore[ic.Index], ic.Position);
@@ -178,7 +178,7 @@ public class FenceDragTests
         // The drop is clamped back onto the screen: right edge exactly at the screen edge…
         var pinned = f.Controller.GetFenceLayout(BoxA);
         Assert.NotNull(pinned);
-        Assert.Equal(new FenceLayout(3600, 400, 400, 300), pinned);
+        Assert.Equal(new FenceLayout(3600, 400, 400, 300, Transient: true), pinned);
         // …every icon got the SAME clamped delta (rigid body, no deformation)…
         foreach (var ic in IconsIn(f, BoxA))
         {
@@ -269,7 +269,7 @@ public class FenceDragTests
         var moved = Assert.Single(f.Host.MovedBounds);
         Assert.Equal(BoxA, moved.Title);
         Assert.Equal(new RectI(300 + 152, 350 + 82, 420, 300), moved.Bounds);
-        Assert.Equal(new FenceLayout(452, 432, 420, 300), f.Controller.GetFenceLayout(BoxA));
+        Assert.Equal(new FenceLayout(452, 432, 420, 300, Transient: true), f.Controller.GetFenceLayout(BoxA));
     }
 
     [Fact]
@@ -320,7 +320,7 @@ public class FenceDragTests
         f.Host.RaiseDragEnded(BoxA);
 
         Assert.Empty(f.Host.MovedBounds); // live == startRect + measured d, nothing to correct
-        Assert.Equal(new FenceLayout(440, 440, 420, 300), f.Controller.GetFenceLayout(BoxA));
+        Assert.Equal(new FenceLayout(440, 440, 420, 300, Transient: true), f.Controller.GetFenceLayout(BoxA));
     }
 
     [Fact]

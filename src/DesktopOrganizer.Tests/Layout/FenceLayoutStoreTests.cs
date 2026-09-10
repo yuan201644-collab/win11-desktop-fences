@@ -94,6 +94,53 @@ public class FenceLayoutStoreTests
     }
 
     [Fact]
+    public void Save_SkipsTransientPlacements_ButKeepsRealPins()
+    {
+        // A drag only REMEMBERS a box for the session (transient); clicking the badge is what makes
+        // it a real pin. Only the real pin may survive a restart — otherwise a stray drag would
+        // petrify the layout and 整理 would stop being able to re-pack the box.
+        var layout = new Dictionary<string, FenceLayout>
+        {
+            ["固定框"] = new(100, 50, 420, 320),
+            ["临时框"] = new(600, 50, 420, 320, Transient: true),
+        };
+        var path = TempPath();
+        try
+        {
+            FenceLayoutStore.Save(path, layout);
+            var loaded = FenceLayoutStore.Load(path);
+
+            var only = Assert.Single(loaded);
+            Assert.Equal("固定框", only.Key);
+            Assert.False(only.Value.Transient);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_FileWrittenBeforeTransientExisted_ComesBackAsARealPin()
+    {
+        // Older files have neither "locked" nor "transient". Loading must not invent a transient
+        // placement — that would make the next 整理 silently re-pack a box the user had pinned.
+        var path = TempPath();
+        try
+        {
+            File.WriteAllText(path, "{\"办公\":{\"x\":1,\"y\":2,\"width\":3,\"height\":4}}");
+
+            var (_, layout) = Assert.Single(FenceLayoutStore.Load(path));
+
+            Assert.False(layout.Transient);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Save_CreatesParentDirectory()
     {
         var dir = Path.Combine(Path.GetTempPath(), "fencelayout-test-dir-" + Path.GetRandomFileName());
