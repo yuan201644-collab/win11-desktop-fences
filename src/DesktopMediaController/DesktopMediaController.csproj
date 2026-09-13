@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- The whole reason the controller is its own project: SMTC (the only system-wide route to
+         media state and transport control) is a WinRT API, and the organizer's net9.0-windows
+         cannot see WinRT at all. Pinned to 19041 — the oldest Windows 10 SDK projection — so the
+         ref pack restores from NuGet. DesktopOrganizer.csproj keeps its TFM untouched. -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>DesktopMediaController</RootNamespace>
+    <AssemblyName>DesktopMediaController</AssemblyName>
+    <!-- Declares PerMonitorV2: the widget must render and hit-test correctly while being dragged
+         between the 100 % and the 125 % monitor. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DesktopMediaController.Core\DesktopMediaController.Core.csproj" />
+  </ItemGroup>
+
+</Project>

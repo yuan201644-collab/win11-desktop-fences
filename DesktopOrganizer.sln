@@ -11,6 +11,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopOrganizer.Core", "sr
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopOrganizer.Tests", "src\DesktopOrganizer.Tests\DesktopOrganizer.Tests.csproj", "{9FBDDED7-6AF1-4A6B-A110-A1A64F0F57FC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopMediaController", "src\DesktopMediaController\DesktopMediaController.csproj", "{B18552A5-CB0C-451D-A9C2-1DE832821661}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopMediaController.Core", "src\DesktopMediaController.Core\DesktopMediaController.Core.csproj", "{926900D2-9FD8-4140-9117-44EF76F689C3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DesktopMediaController.Tests", "src\DesktopMediaController.Tests\DesktopMediaController.Tests.csproj", "{BC500C7C-BCE3-4395-B145-6A476C37BFB1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,10 +38,25 @@ Global
 		{9FBDDED7-6AF1-4A6B-A110-A1A64F0F57FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9FBDDED7-6AF1-4A6B-A110-A1A64F0F57FC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9FBDDED7-6AF1-4A6B-A110-A1A64F0F57FC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B18552A5-CB0C-451D-A9C2-1DE832821661}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B18552A5-CB0C-451D-A9C2-1DE832821661}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B18552A5-CB0C-451D-A9C2-1DE832821661}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B18552A5-CB0C-451D-A9C2-1DE832821661}.Release|Any CPU.Build.0 = Release|Any CPU
+		{926900D2-9FD8-4140-9117-44EF76F689C3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{926900D2-9FD8-4140-9117-44EF76F689C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{926900D2-9FD8-4140-9117-44EF76F689C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{926900D2-9FD8-4140-9117-44EF76F689C3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BC500C7C-BCE3-4395-B145-6A476C37BFB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BC500C7C-BCE3-4395-B145-6A476C37BFB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BC500C7C-BCE3-4395-B145-6A476C37BFB1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BC500C7C-BCE3-4395-B145-6A476C37BFB1}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{D255E11C-5B3D-4B91-9B74-091979BD8A29} = {86491A71-9E5C-4CD9-B1BC-ACFF6809E575}
 		{1612E3BD-05EE-4CDD-9554-73236B524A58} = {86491A71-9E5C-4CD9-B1BC-ACFF6809E575}
 		{9FBDDED7-6AF1-4A6B-A110-A1A64F0F57FC} = {86491A71-9E5C-4CD9-B1BC-ACFF6809E575}
+		{B18552A5-CB0C-451D-A9C2-1DE832821661} = {86491A71-9E5C-4CD9-B1BC-ACFF6809E575}
+		{926900D2-9FD8-4140-9117-44EF76F689C3} = {86491A71-9E5C-4CD9-B1BC-ACFF6809E575}
+		{BC500C7C-BCE3-4395-B145-6A476C37BFB1} = {86491A71-9E5C-4CD9-B1BC-ACFF6809E575}
 	EndGlobalSection
 EndGlobal
