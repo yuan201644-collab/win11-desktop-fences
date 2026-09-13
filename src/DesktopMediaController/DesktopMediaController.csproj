@@ -9,12 +9,34 @@
     <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <UseWPF>true</UseWPF>
+    <!-- The tray icon. System.Windows.Forms.NotifyIcon is the in-box implementation of
+         Shell_NotifyIcon and, unlike a hand-rolled one, re-registers itself when Explorer restarts;
+         writing that by hand means listening for the TaskbarCreated broadcast and is easy to get
+         subtly wrong. The right-click menu is therefore a WinForms menu. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>DesktopMediaController</RootNamespace>
     <AssemblyName>DesktopMediaController</AssemblyName>
+    <!-- One icon for everything: the executable, its shortcut, and the tray glyph are all loaded
+         from this file, so they cannot drift apart. -->
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <!-- Declares PerMonitorV2: the widget must render and hit-test correctly while being dragged
          between the 100 % and the 125 % monitor. -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Embedded rather than a loose file next to the exe: the tray icon must be available no matter
+         where the executable is launched from. -->
+    <Resource Include="Assets\AppIcon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- UseWindowsForms adds System.Drawing and System.Windows.Forms to the implicit usings, which
+         collide with the WPF types this project uses (Application, Image, Color, ...). Removed here
+         so every file states what it needs; TrayIconHost aliases the WinForms namespaces instead. -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DesktopMediaController.Core\DesktopMediaController.Core.csproj" />

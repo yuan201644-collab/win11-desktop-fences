@@ -31,4 +31,28 @@ internal static class WidgetNative
     /// <summary>Current cursor position in physical screen pixels (the drag's source of truth).</summary>
     internal static (int X, int Y) CursorPosition() =>
         NativeMethods.GetCursorPos(out var p) ? (p.X, p.Y) : (0, 0);
+
+    /// <summary>
+    /// Hides or shows the card. Hiding keeps the window and its handle alive — the process, the SMTC
+    /// poll and the frozen title all survive — it only drops out of sight. Returning the card uses
+    /// <c>SW_SHOWNOACTIVATE</c> so clicking the tray icon never pulls focus away from the player.
+    /// </summary>
+    internal static void SetVisible(IntPtr hwnd, bool visible) =>
+        _ = NativeMethods.ShowWindow(hwnd, visible
+            ? NativeMethods.SW_SHOWNOACTIVATE
+            : NativeMethods.SW_HIDE);
+
+    /// <summary>Whether the window is actually on screen right now.</summary>
+    internal static bool IsVisible(IntPtr hwnd) => NativeMethods.IsWindowVisible(hwnd);
+
+    /// <summary>
+    /// Locates the widget by its frozen title, for the single-instance hand-off. Deliberately
+    /// <c>FindWindow</c> rather than an enumeration that filters on visibility: a hidden card must
+    /// still be reachable, or the tray icon would be the only way back.
+    /// </summary>
+    internal static IntPtr FindByTitle(string title) => NativeMethods.FindWindow(null, title);
+
+    /// <summary>Hands a custom message to another window of ours; never blocks.</summary>
+    internal static void Post(IntPtr hwnd, int message) =>
+        _ = NativeMethods.PostMessage(hwnd, (uint)message, IntPtr.Zero, IntPtr.Zero);
 }

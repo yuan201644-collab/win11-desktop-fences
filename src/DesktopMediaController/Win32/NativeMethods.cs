@@ -18,6 +18,12 @@ internal static class NativeMethods
     internal const int SWP_NOSIZE = 0x0001;
     internal const int SWP_NOACTIVATE = 0x0010;
 
+    /// <summary>nCmdShow for <see cref="ShowWindow"/>: hide without destroying the window.</summary>
+    internal const int SW_HIDE = 0;
+
+    /// <summary>nCmdShow for <see cref="ShowWindow"/>: show without stealing focus from the player.</summary>
+    internal const int SW_SHOWNOACTIVATE = 4;
+
     /// <summary>HWND_TOPMOST for <see cref="SetWindowPos"/>.</summary>
     internal static readonly IntPtr HwndTopmost = new(-1);
 
@@ -52,4 +58,29 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern int GetSystemMetrics(int nIndex);
+
+    /// <summary>
+    /// Hides or shows the window without destroying it, so a hidden card keeps its handle — which is
+    /// what lets a second launch find it and what tells the packer the card is not on screen.
+    /// </summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    /// <summary>
+    /// Ground truth for "is the card on screen". The packer must test this and not mere existence:
+    /// a hidden window is still enumerable.
+    /// </summary>
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsWindowVisible(IntPtr hWnd);
+
+    /// <summary>Finds a top-level window by title. Works on a hidden window, which is the point.</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+    /// <summary>Used to hand a "surface the card" request to the already-running instance.</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 }

@@ -75,7 +75,7 @@
                             Style="{StaticResource IconButton}"
                             Width="20" Height="20" Margin="6,0,0,0"
                             FontSize="10" Foreground="#B3FFFFFF"
-                            Content="&#x2715;" ToolTip="关闭桌面媒体控制器"
+                            Content="&#x2715;" ToolTip="隐藏到托盘（音乐继续播放，右键托盘图标退出）"
                             Click="OnCloseClick" />
                     <TextBlock x:Name="TitleText" Text="未连接到播放器"
                                FontSize="13.5" FontWeight="SemiBold" Foreground="#F2FFFFFF"
