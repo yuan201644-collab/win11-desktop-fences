@@ -2,7 +2,9 @@ using System.Windows;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using DesktopMediaController.Core;
+using DesktopMediaController.Services;
 using DesktopMediaController.Win32;
 
 namespace DesktopMediaController.Widget;
@@ -42,9 +44,18 @@ internal sealed class WidgetWindow
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WM_SIZE = 0x0005;
 
+    /// <summary>
+    /// How often the widget re-reads the players. Fast enough that a track change feels immediate,
+    /// slow enough that the per-tick cost is irrelevant. See <see cref="SmtcMediaSource"/> for why
+    /// this is a poll rather than a subscription.
+    /// </summary>
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(300);
+
     private readonly HwndSource _source;
     private readonly WidgetCard _card;
     private readonly IntPtr _hwnd;
+    private readonly SmtcMediaSource _media = new();
+    private readonly DispatcherTimer _pollTimer;
 
     private bool _dragging;
     private (int X, int Y) _grabCursor;
@@ -92,7 +103,57 @@ internal sealed class WidgetWindow
         _card.MouseLeftButtonDown += OnCardMouseDown;
         _card.MouseMove += OnCardMouseMove;
         _card.MouseLeftButtonUp += OnCardMouseUp;
+        _card.ToggleRequested += OnToggleRequested;
+        _card.NextRequested += OnNextRequested;
+        _card.PreviousRequested += OnPreviousRequested;
+        _card.SourceSwitchRequested += OnSourceSwitchRequested;
+
+        // Low priority: repainting the card must never compete with a drag. Ticks that land while a
+        // refresh is still in flight are dropped rather than queued (see SmtcMediaSource).
+        _pollTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = PollInterval };
+        _pollTimer.Tick += OnPollTick;
+        _pollTimer.Start();
+
+        // Fire-and-forget on purpose: it swallows its own failures (a machine with SMTC unavailable
+        // still gets a draggable widget) and every tick before it completes is a harmless no-op.
+        _ = _media.InitializeAsync();
     }
+
+    private async void OnPollTick(object? sender, EventArgs e)
+    {
+        await _media.RefreshAsync();
+        _card.Apply(_media.Snapshot);
+    }
+
+    private async void OnToggleRequested(object? sender, EventArgs e)
+    {
+        await _media.TogglePlayPauseAsync();
+        RepaintNow();
+    }
+
+    private async void OnNextRequested(object? sender, EventArgs e)
+    {
+        await _media.NextAsync();
+        RepaintNow();
+    }
+
+    private async void OnPreviousRequested(object? sender, EventArgs e)
+    {
+        await _media.PreviousAsync();
+        RepaintNow();
+    }
+
+    private void OnSourceSwitchRequested(object? sender, EventArgs e)
+    {
+        _media.CycleSession();
+        RepaintNow();
+    }
+
+    /// <summary>
+    /// Repaints straight away after a command instead of waiting for the next tick, so a button press
+    /// looks like it did something even when the player is slow to publish its new state.
+    /// </summary>
+    private void RepaintNow() => _card.Apply(_media.Snapshot);
 
     private int WidthOf() => WidgetNative.BoundsOf(_hwnd).Width;
 
@@ -148,6 +209,8 @@ internal sealed class WidgetWindow
 
     private void OnCloseRequested(object? sender, EventArgs e)
     {
+        _pollTimer.Stop();
+        _media.Dispose();
         SettleAndSave();
         Application.Current?.Shutdown();
     }
