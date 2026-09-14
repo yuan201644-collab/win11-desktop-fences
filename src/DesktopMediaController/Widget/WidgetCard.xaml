@@ -123,10 +123,10 @@
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="2,5,0,0">
                     <TextBlock x:Name="TitleText" Text="未连接到播放器"
                                FontSize="21" FontWeight="SemiBold" Foreground="#F2FFFFFF"
-                               TextTrimming="CharacterEllipsis" VerticalAlignment="Baseline" />
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Bottom" />
                     <TextBlock x:Name="ArtistText" Text="打开播放器后自动显示" FontSize="13"
                                Margin="12,0,0,0" Foreground="#B0FFFFFF"
-                               TextTrimming="CharacterEllipsis" VerticalAlignment="Baseline" />
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Bottom" />
                 </StackPanel>
 
                 <!-- Lyrics: the line being sung, with one either side for context, over a fourth row

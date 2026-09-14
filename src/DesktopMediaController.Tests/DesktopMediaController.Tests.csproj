@@ -1,7 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- windows TFM + UseWPF, because the suite now instantiates the app's WPF controls (the BAML
+         smoke test): enum values inside XAML are only validated at parse time, so a bad attribute
+         such as VerticalAlignment="Baseline" compiles clean and kills the exe at startup. -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -20,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DesktopMediaController.Core\DesktopMediaController.Core.csproj" />
+    <ProjectReference Include="..\DesktopMediaController\DesktopMediaController.csproj" />
   </ItemGroup>
 
 </Project>

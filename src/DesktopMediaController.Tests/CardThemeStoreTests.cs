@@ -1,3 +1,4 @@
+using System.IO;
 using DesktopMediaController.Core;
 
 namespace DesktopMediaController.Tests;

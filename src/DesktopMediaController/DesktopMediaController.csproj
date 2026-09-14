@@ -61,4 +61,10 @@
     <ProjectReference Include="..\DesktopMediaController.Core\DesktopMediaController.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The BAML smoke test drives internal surface (ApplyTheme) so a XAML parse failure cannot
+         reach a user's machine again. -->
+    <InternalsVisibleTo Include="DesktopMediaController.Tests" />
+  </ItemGroup>
+
 </Project>
