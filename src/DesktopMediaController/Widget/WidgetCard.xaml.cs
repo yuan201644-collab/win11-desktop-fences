@@ -255,6 +255,9 @@ public sealed partial class WidgetCard : UserControl
         _themeMenu.BorderBrush = new SolidColorBrush(Color.FromArgb(0xFF, 0x3A, 0x3A, 0x42));
         _themeMenu.BorderThickness = new Thickness(1);
         _themeMenu.Padding = new Thickness(8);
+        // Replace the Aero2 menu chrome entirely — its inner frame and highlight colors
+        // carry system blue that BorderBrush alone cannot neutralize.
+        _themeMenu.Template = MenuChromeTemplate();
         _themeMenu.Opened += (_, _) => SyncMenuControls();
 
         _themeMenu.Items.Add(HeaderLabel("主题色"));
@@ -274,7 +277,7 @@ public sealed partial class WidgetCard : UserControl
         _themeMenu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
         _themeMenu.Items.Add(BuildTransparencySlider());
 
-        var restore = new MenuItem { Header = "恢复默认配色", Foreground = new SolidColorBrush(Colors.White), FocusVisualStyle = null };
+        var restore = new MenuItem { Header = "恢复默认配色", Foreground = new SolidColorBrush(Colors.White), FocusVisualStyle = null, Template = FlatMenuItemTemplate() };
         restore.Click += (_, _) => ChooseTheme(CardTheme.Default);
         _themeMenu.Items.Add(restore);
 
@@ -301,6 +304,8 @@ public sealed partial class WidgetCard : UserControl
             Cursor = System.Windows.Input.Cursors.Hand,
             ToolTip = toolTip,
             Focusable = false, FocusVisualStyle = null,
+            // Aero2 Button chrome paints a blue hover/press border; use a flat neutral one.
+            Template = FlatButtonTemplate(),
         };
     }
 
@@ -326,11 +331,14 @@ public sealed partial class WidgetCard : UserControl
             Width = 92, Height = 22, Text = "#87C5FF",
             Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x30, 0x30, 0x38)),
             Foreground = new SolidColorBrush(Colors.White),
-            // Neutral border, and no focus rectangle.
+            // Neutral border, and a template whose focus state is neutral too —
+            // the Aero2 TextBox paints a system-blue border on keyboard focus
+            // that BorderBrush cannot override.
             BorderBrush = new SolidColorBrush(Color.FromArgb(0xFF, 0x4A, 0x4A, 0x55)),
             VerticalContentAlignment = VerticalAlignment.Center,
             Padding = new Thickness(4, 0, 4, 0),
             FocusVisualStyle = null,
+            Template = FlatTextBoxTemplate(),
         };
         var apply = new Button
         {
@@ -338,7 +346,7 @@ public sealed partial class WidgetCard : UserControl
             Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x3A, 0x6E, 0xA5)),
             Foreground = new SolidColorBrush(Colors.White),
             BorderThickness = new Thickness(0), Cursor = System.Windows.Input.Cursors.Hand,
-            Focusable = false, FocusVisualStyle = null,
+            Focusable = false, FocusVisualStyle = null, Template = FlatButtonTemplate(),
         };
         apply.Click += (_, _) =>
         {
@@ -385,6 +393,7 @@ public sealed partial class WidgetCard : UserControl
             VerticalContentAlignment = VerticalAlignment.Center,
             Padding = new Thickness(4, 0, 4, 0),
             FocusVisualStyle = null,
+            Template = FlatTextBoxTemplate(),
         };
         _bgHexBox = box;
         var apply = new Button
@@ -393,7 +402,7 @@ public sealed partial class WidgetCard : UserControl
             Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x3A, 0x6E, 0xA5)),
             Foreground = new SolidColorBrush(Colors.White),
             BorderThickness = new Thickness(0), Cursor = System.Windows.Input.Cursors.Hand,
-            Focusable = false, FocusVisualStyle = null,
+            Focusable = false, FocusVisualStyle = null, Template = FlatButtonTemplate(),
         };
         apply.Click += (_, _) =>
         {
@@ -431,6 +440,10 @@ public sealed partial class WidgetCard : UserControl
             Value = Math.Round(_theme.Background.A * 100.0 / 255.0),
             VerticalAlignment = VerticalAlignment.Center,
             Focusable = false, FocusVisualStyle = null,
+            // Neutral track/thumb; jump to the clicked position since the
+            // flat template has no repeat buttons.
+            Template = FlatSliderTemplate(),
+            IsMoveToPointEnabled = true,
         };
         slider.ValueChanged += (_, e) =>
         {
@@ -460,6 +473,108 @@ public sealed partial class WidgetCard : UserControl
         ThemeChanged?.Invoke(this, theme);
         _themeMenu.IsOpen = false;
     }
+
+    // ── neutral menu chrome ─────────────────────────────────────────────
+    // The Aero2 theme paints system blue inside the *templates* of Button
+    // (hover/press border), TextBox (keyboard-focus border), MenuItem (hover
+    // highlight) and ContextMenu (inner frame). Setting BorderBrush or
+    // FocusVisualStyle cannot reach those states, so every interactive control
+    // in the color menu gets one of these flat neutral templates instead.
+
+    private static ControlTemplate ParseTemplate(string xaml) =>
+        (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
+
+    private static ControlTemplate MenuChromeTemplate() => ParseTemplate(
+        """
+        <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         TargetType="{x:Type ContextMenu}">
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+                <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
+            </Border>
+        </ControlTemplate>
+        """);
+
+    private static ControlTemplate FlatButtonTemplate() => ParseTemplate(
+        """
+        <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         TargetType="{x:Type Button}">
+            <Border x:Name="bd"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="4">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="bd" Property="BorderBrush" Value="#6A6A76"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+        """);
+
+    private static ControlTemplate FlatTextBoxTemplate() => ParseTemplate(
+        """
+        <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         TargetType="{x:Type TextBox}">
+            <Border x:Name="bd"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="4">
+                <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter TargetName="bd" Property="BorderBrush" Value="#8A8A96"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+        """);
+
+    private static ControlTemplate FlatMenuItemTemplate() => ParseTemplate(
+        """
+        <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         TargetType="{x:Type MenuItem}">
+            <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="8,4">
+                <ContentPresenter ContentSource="Header" TextElement.Foreground="#FFFFFF"/>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="bd" Property="Background" Value="#3A3A42"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+        """);
+
+    private static ControlTemplate FlatSliderTemplate() => ParseTemplate(
+        """
+        <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                         TargetType="{x:Type Slider}">
+            <Grid VerticalAlignment="Center">
+                <Border Height="4" CornerRadius="2" Background="#3A3A42"/>
+                <Track x:Name="PART_Track">
+                    <Track.Thumb>
+                        <Thumb Width="12" Height="12" Focusable="False">
+                            <Thumb.Template>
+                                <ControlTemplate TargetType="{x:Type Thumb}">
+                                    <Ellipse Fill="#C8C8D0" Stroke="#5A5A66" StrokeThickness="1"/>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Track.Thumb>
+                </Track>
+            </Grid>
+        </ControlTemplate>
+        """);
 
     private static UIElement HeaderLabel(string text) =>
         new TextBlock
