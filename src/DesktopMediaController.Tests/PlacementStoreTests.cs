@@ -35,6 +35,32 @@ public sealed class PlacementStoreTests
     }
 
     [Fact]
+    public void SaveThenLoad_RoundTripsThePin()
+    {
+        var path = TempFile();
+        var saved = new WidgetPlacement(40, 50, 440, 176, Pinned: true);
+
+        PlacementStore.Save(path, saved);
+
+        Assert.Equal(saved, PlacementStore.Load(path));
+    }
+
+    [Fact]
+    public void Load_FileWrittenBeforeThePinExisted_IsNotPinned()
+    {
+        // The pin's whole point is that it is opt-in: a placement file from before the button — and
+        // therefore every card upgraded in place — lands unpinned, under the user's software.
+        var path = TempFile();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{ "X": 100, "Y": 100, "WidthDip": 440, "HeightDip": 176 }""");
+
+        var placement = PlacementStore.Load(path);
+
+        Assert.NotNull(placement);
+        Assert.False(placement!.Value.Pinned);
+    }
+
+    [Fact]
     public void Load_FileWrittenBeforeTheCardWasResizable_KeepsThePositionButTakesTheDefaultSize()
     {
         // Exactly what an older build left behind: a position and nothing else. The position is the

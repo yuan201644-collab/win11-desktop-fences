@@ -53,7 +53,6 @@ internal sealed class WidgetWindow
     private const int WS_POPUP = unchecked((int)0x80000000);
     private const int WS_VISIBLE = 0x10000000;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
-    private const int WS_EX_TOPMOST = 0x00000008;
     private const int WS_EX_NOACTIVATE = 0x08000000;
     private const int WM_SIZE = 0x0005;
     private const int WM_SHOWWINDOW = 0x0018;
@@ -105,6 +104,13 @@ internal sealed class WidgetWindow
     private WidgetSize _grabSize;
     private (int X, int Y) _grabCursor;
     private ScreenRect _grabBounds;
+
+    /// <summary>
+    /// Whether the user has pinned the card above every window. The window is the single owner of the
+    /// state — the z-order ex-style is applied straight from here — and the card only mirrors it for
+    /// display; see <see cref="OnPinRequested"/>.
+    /// </summary>
+    private bool _pinned;
 
     // ---- lyric state --------------------------------------------------------------------------
 
@@ -164,7 +170,12 @@ internal sealed class WidgetWindow
             // so a WS_POPUP-only window is created and stays invisible. That is precisely what a
             // silent start wants - see the startHidden remark above.
             WindowStyle = startHidden ? WS_POPUP : WS_POPUP | WS_VISIBLE,
-            ExtendedWindowStyle = WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            // Deliberately no WS_EX_TOPMOST and no WS_EX_NOACTIVATE. The card is a normal window by
+            // default — it sits under whatever software the user is working in, and a click raises it
+            // like any window — and the pin button is what lifts it into the topmost band (see
+            // WidgetNative.SetPinned). Both halves of the old behaviour lived here: a topmost card
+            // that NOACTIVATE kept from ever being *reached* through the windows above it.
+            ExtendedWindowStyle = WS_EX_TOOLWINDOW,
             // Per-pixel alpha: what lets the card be a translucent, rounded shape instead of a
             // rectangle. Turns the window into a layered window under the hood.
             UsesPerPixelOpacity = true,
@@ -180,6 +191,13 @@ internal sealed class WidgetWindow
         _source.AddHook(WndProc);
         MoveTo(PlacementStore.Clamp(start.Position, screen, WidthOf(), HeightOf()));
 
+        // Restores the pin from the placement file. Done after the window exists because the pin *is*
+        // a z-order operation on that window; the card visual is told the same value so the button
+        // never advertises a state the window is not in.
+        _pinned = start.Pinned;
+        WidgetNative.SetPinned(_hwnd, _pinned);
+        _card.SetPinnedVisual(_pinned);
+
         _card.MouseLeftButtonDown += OnCardMouseDown;
         _card.MouseMove += OnCardMouseMove;
         _card.MouseLeftButtonUp += OnCardMouseUp;
@@ -188,6 +206,7 @@ internal sealed class WidgetWindow
         _card.NextRequested += OnNextRequested;
         _card.PreviousRequested += OnPreviousRequested;
         _card.SourceSwitchRequested += OnSourceSwitchRequested;
+        _card.PinRequested += OnPinRequested;
 
         // Low priority: repainting the card must never compete with a drag or a resize. Ticks that
         // land while a refresh is still in flight are dropped rather than queued (see SmtcMediaSource).
@@ -407,6 +426,32 @@ internal sealed class WidgetWindow
     }
 
     /// <summary>
+    /// Flips the pin: into the topmost band, or back down among the normal windows.
+    /// </summary>
+    /// <remarks>
+    /// Saved immediately rather than waiting for the next drag, because the pin is a deliberate
+    /// setting the user will expect to survive a crash, not a side effect of where the card ended up.
+    /// </remarks>
+    private void OnPinRequested(object? sender, EventArgs e)
+    {
+        _pinned = !_pinned;
+        WidgetNative.SetPinned(_hwnd, _pinned);
+        _card.SetPinnedVisual(_pinned);
+
+        var bounds = WidgetNative.BoundsOf(_hwnd);
+        var position = PlacementStore.Clamp(
+            new WidgetPosition(bounds.X, bounds.Y),
+            WidgetNative.VirtualScreen(),
+            bounds.Width,
+            bounds.Height);
+        PlacementStore.Save(PlacementStore.DefaultFilePath, Placement(position));
+    }
+
+    /// <summary>The placement to persist for the card as it is right now.</summary>
+    private WidgetPlacement Placement(WidgetPosition position) =>
+        new(position.X, position.Y, _card.CardSize.WidthDip, _card.CardSize.HeightDip, _pinned);
+
+    /// <summary>
     /// Repaints straight away after a command instead of waiting for the next tick, so a button press
     /// looks like it did something even when the player is slow to publish its new state.
     /// </summary>
@@ -598,10 +643,7 @@ internal sealed class WidgetWindow
 
         // The size is read back from the card rather than from the window: the card holds DIPs, which
         // is the form that survives a monitor scale change, and the window's pixels are derived from it.
-        var size = _card.CardSize;
-        PlacementStore.Save(
-            PlacementStore.DefaultFilePath,
-            new WidgetPlacement(position.X, position.Y, size.WidthDip, size.HeightDip));
+        PlacementStore.Save(PlacementStore.DefaultFilePath, Placement(position));
     }
 
     private WidgetPosition ClampToScreen()

@@ -16,6 +16,8 @@ internal static class NativeMethods
     internal const int SM_CYVIRTUALSCREEN = 79;
 
     internal const int SWP_NOSIZE = 0x0001;
+    internal const int SWP_NOMOVE = 0x0002;
+    internal const int SWP_NOZORDER = 0x0004;
     internal const int SWP_NOACTIVATE = 0x0010;
 
     /// <summary>nCmdShow for <see cref="ShowWindow"/>: hide without destroying the window.</summary>
@@ -24,8 +26,15 @@ internal static class NativeMethods
     /// <summary>nCmdShow for <see cref="ShowWindow"/>: show without stealing focus from the player.</summary>
     internal const int SW_SHOWNOACTIVATE = 4;
 
-    /// <summary>HWND_TOPMOST for <see cref="SetWindowPos"/>.</summary>
+    /// <summary>HWND_TOPMOST for <see cref="SetWindowPos"/>: the band of windows above everything.</summary>
     internal static readonly IntPtr HwndTopmost = new(-1);
+
+    /// <summary>
+    /// HWND_NOTOPMOST for <see cref="SetWindowPos"/>: leaves the topmost band, clearing
+    /// <c>WS_EX_TOPMOST</c> while keeping the window's place among normal windows. This — not
+    /// restyling — is how the pin is undone.
+    /// </summary>
+    internal static readonly IntPtr HwndNotTopmost = new(-2);
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct POINT

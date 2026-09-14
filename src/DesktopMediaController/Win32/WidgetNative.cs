@@ -23,10 +23,33 @@ internal static class WidgetNative
         return new ScreenRect(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
     }
 
-    /// <summary>Moves the window without touching its size.</summary>
+    /// <summary>
+    /// Moves the window without touching its size — or, deliberately, its z-order.
+    /// </summary>
+    /// <remarks>
+    /// Drags and resizes used to re-assert <c>HWND_TOPMOST</c> here on every frame, which is half of
+    /// why the card always floated above everything: the pin state said one thing and every move
+    /// quietly overrode it. Position changes carry <c>SWP_NOZORDER</c>; z-order belongs to
+    /// <see cref="SetPinned"/> alone.
+    /// </remarks>
     internal static void MoveTo(IntPtr hwnd, int x, int y) =>
-        NativeMethods.SetWindowPos(hwnd, NativeMethods.HwndTopmost, x, y, 0, 0,
-            NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0,
+            NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
+
+    /// <summary>
+    /// Puts the window into — or takes it out of — the topmost band.
+    /// </summary>
+    /// <remarks>
+    /// <c>HWND_TOPMOST</c>/<c>HWND_NOTOPMOST</c> set and clear <c>WS_EX_TOPMOST</c> themselves, so no
+    /// restyle is needed; and because the two bands are a single z-order slot, this is also what makes
+    /// an unpinned card sink back under the software the user is working in rather than merely
+    /// "stop being re-raised".
+    /// </remarks>
+    internal static void SetPinned(IntPtr hwnd, bool pinned) =>
+        NativeMethods.SetWindowPos(hwnd,
+            pinned ? NativeMethods.HwndTopmost : NativeMethods.HwndNotTopmost,
+            0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
 
     /// <summary>Current cursor position in physical screen pixels (the drag's source of truth).</summary>
     internal static (int X, int Y) CursorPosition() =>

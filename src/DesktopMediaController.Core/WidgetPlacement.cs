@@ -13,7 +13,14 @@ namespace DesktopMediaController.Core;
 /// <param name="Y">Top edge, in physical pixels.</param>
 /// <param name="WidthDip">Card width in device-independent pixels.</param>
 /// <param name="HeightDip">Card height in device-independent pixels.</param>
-public readonly record struct WidgetPlacement(int X, int Y, double WidthDip, double HeightDip)
+/// <param name="Pinned">
+/// Whether the user asked for the card to float above every window. The default — and therefore what
+/// a placement file written before the pin existed, or a first run, resolves to — is <c>false</c>: the
+/// card lives in the normal window order, under whatever software the user is working in, and the pin
+/// button is what lifts it out.
+/// </param>
+public readonly record struct WidgetPlacement(
+    int X, int Y, double WidthDip, double HeightDip, bool Pinned = false)
 {
     /// <summary>Margin from the virtual screen's top-left when there is no saved placement.</summary>
     public const int FirstRunMargin = 80;

@@ -79,7 +79,9 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <!-- Title + close. The close button is docked so a long title ellipsises before it. -->
+                <!-- Title + pin + close. The close button is docked so a long title ellipsises before
+                     it; the pin sits beside it because both are card-level commands, not playback
+                     ones. -->
                 <DockPanel Grid.Row="0">
                     <Button x:Name="CloseButton" DockPanel.Dock="Right"
                             Style="{StaticResource IconButton}"
@@ -87,6 +89,15 @@
                             FontSize="10" Foreground="#B3FFFFFF"
                             Content="&#x2715;" ToolTip="隐藏到托盘（音乐继续播放，右键托盘图标退出）"
                             Click="OnCloseClick" />
+                    <!-- Glyphs from Segoe MDL2 Assets, the same set the shell's own pin buttons use:
+                         E718 is the pin, E77A the un-pin. The card swaps them in code — see
+                         WidgetCard.SetPinnedVisual — rather than keeping two buttons in step. -->
+                    <Button x:Name="PinButton" DockPanel.Dock="Right"
+                            Style="{StaticResource IconButton}"
+                            Width="20" Height="20"
+                            FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#8CFFFFFF"
+                            Content="&#xE718;" ToolTip="固定在最上层（让卡片浮在所有软件之上）"
+                            Click="OnPinClick" />
                     <TextBlock x:Name="TitleText" Text="未连接到播放器"
                                FontSize="13.5" FontWeight="SemiBold" Foreground="#F2FFFFFF"
                                TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />

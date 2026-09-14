@@ -79,6 +79,12 @@ public sealed partial class WidgetCard : UserControl
     /// </remarks>
     private static readonly Brush IdleBrush = FrozenBrush(0x59, 0xFF, 0xFF, 0xFF);
 
+    /// <summary>The pin button's accent — the source-label blue, the card's established "interactive" tint.</summary>
+    private static readonly Brush PinnedBrush = FrozenBrush(0xB3, 0xD6, 0xFF);
+
+    /// <summary>The pin button at rest: the same near-white as its neighbours.</summary>
+    private static readonly Brush UnpinnedBrush = FrozenBrush(0x8C, 0xFF, 0xFF, 0xFF);
+
     private WidgetSize _size;
 
     /// <summary>
@@ -173,6 +179,9 @@ public sealed partial class WidgetCard : UserControl
 
     /// <summary>Raised when the user asks the widget to close.</summary>
     public event EventHandler? CloseRequested;
+
+    /// <summary>Raised when the user clicks the pin, to ask for the opposite of the current state.</summary>
+    public event EventHandler? PinRequested;
 
     /// <summary>Raised when the user clicks play/pause.</summary>
     public event EventHandler? ToggleRequested;
@@ -677,6 +686,27 @@ public sealed partial class WidgetCard : UserControl
 
     private void OnCloseClick(object sender, RoutedEventArgs e) =>
         CloseRequested?.Invoke(this, EventArgs.Empty);
+
+    private void OnPinClick(object sender, RoutedEventArgs e) =>
+        PinRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>
+    /// Reflects the pinned state on the button: an unlit pin invites the click, a lit one says what
+    /// state the card is in and offers to end it.
+    /// </summary>
+    /// <remarks>
+    /// The window owns the state — it is the window's ex-style that actually changes — so the card
+    /// only ever renders what it is told. Called once with the restored value at startup, so the
+    /// button never shows a state the card is not in.
+    /// </remarks>
+    internal void SetPinnedVisual(bool pinned)
+    {
+        PinButton.Content = pinned ? "\uE77A" : "\uE718";
+        PinButton.Foreground = pinned ? PinnedBrush : UnpinnedBrush;
+        PinButton.ToolTip = pinned
+            ? "取消固定（回到普通窗口，显示在软件之下）"
+            : "固定在最上层（让卡片浮在所有软件之上）";
+    }
 
     private void OnToggleClick(object sender, RoutedEventArgs e) =>
         ToggleRequested?.Invoke(this, EventArgs.Empty);
