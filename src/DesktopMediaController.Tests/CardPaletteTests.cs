@@ -119,4 +119,56 @@ public sealed class CardPaletteTests
     {
         Assert.False(ArgbColor.Parse(input).HasValue);
     }
+
+    [Fact]
+    public void Darken_ScalesRgbTowardBlackAndKeepsAlpha()
+    {
+        var color = ArgbColor.FromArgb(0xE8, 0x2A, 0x2A, 0x2C);
+
+        var half = CardPalette.Darken(color, 0.5);
+        Assert.Equal(0xE8, half.A);
+        Assert.Equal(0x15, half.R);
+        Assert.Equal(0x15, half.G);
+        Assert.Equal(0x16, half.B);
+
+        Assert.Equal(color, CardPalette.Darken(color, 1.0));
+        var black = CardPalette.Darken(color, 0.0);
+        Assert.Equal(0xE8, black.A);
+        Assert.Equal(0, black.R);
+        Assert.Equal(0, black.G);
+        Assert.Equal(0, black.B);
+    }
+
+    [Fact]
+    public void Darken_ClampsAnOutOfRangeFactor()
+    {
+        var color = ArgbColor.FromArgb(0xFF, 0x10, 0x20, 0x30);
+
+        // Anything below 0 clamps to black — the factor is a fraction, not an offset.
+        var clampedLow = CardPalette.Darken(color, -1.0);
+        Assert.Equal(0, clampedLow.R);
+        Assert.Equal(0, clampedLow.G);
+        Assert.Equal(0, clampedLow.B);
+
+        var clampedHigh = CardPalette.Darken(color, 5.0);
+        Assert.Equal(color, clampedHigh);
+    }
+
+    [Fact]
+    public void PanelFromBackground_IsDarkerThanTheBackgroundItself()
+    {
+        // The whole point of the lyric panel: an inset that reads as deeper than the card while
+        // staying in the same colour family.
+        foreach (var background in CardPalette.BackgroundPresets)
+        {
+            var opaque = background with { A = 0xFF };
+            var panel = CardPalette.PanelFromBackground(opaque);
+
+            // Pure black has nothing left to darken to; every other hue must lose some channel.
+            if (opaque.R == 0 && opaque.G == 0 && opaque.B == 0) continue;
+
+            Assert.True(panel.R < opaque.R || panel.G < opaque.G || panel.B < opaque.B,
+                $"panel {panel} not darker than background {opaque}");
+        }
+    }
 }

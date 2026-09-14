@@ -27,7 +27,9 @@ public sealed class PlacementStoreTests
     public void SaveThenLoad_RoundTripsThePlacement()
     {
         var path = TempFile();
-        var saved = new WidgetPlacement(-1200, 340, 520, 220);
+        // Only preset sizes are ever saved — the card's ratio is fixed — so a roundtrip must be
+        // exact for them…
+        var saved = new WidgetPlacement(-1200, 340, WidgetSize.BaseWidthDip, WidgetSize.BaseHeightDip);
 
         PlacementStore.Save(path, saved);
 
@@ -35,10 +37,25 @@ public sealed class PlacementStoreTests
     }
 
     [Fact]
+    public void SaveThenLoad_AnOffRatioSize_IsSnappedOntoTheNearestPreset()
+    {
+        // …and a hand-edited or legacy off-ratio size comes back as the preset it is nearest to,
+        // because nothing may persist a size the card cannot render.
+        var path = TempFile();
+        var saved = new WidgetPlacement(-1200, 340, 520, 220);
+
+        PlacementStore.Save(path, saved);
+
+        var loaded = PlacementStore.Load(path)!.Value;
+        Assert.Equal(WidgetSize.Base, loaded.Size);
+    }
+
+    [Fact]
     public void SaveThenLoad_RoundTripsThePin()
     {
         var path = TempFile();
-        var saved = new WidgetPlacement(40, 50, 440, 176, Pinned: true);
+        // A preset size, which is all the card ever persists: Load's coercion must be a no-op on it.
+        var saved = new WidgetPlacement(40, 50, WidgetSize.BaseWidthDip, WidgetSize.BaseHeightDip, Pinned: true);
 
         PlacementStore.Save(path, saved);
 
@@ -78,7 +95,7 @@ public sealed class PlacementStoreTests
     }
 
     [Fact]
-    public void Load_FileWithANonsenseSize_ClampsItIntoTheRenderableRange()
+    public void Load_FileWithANonsenseSize_IsSnappedOntoTheNearestScalePreset()
     {
         var path = TempFile();
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -87,8 +104,8 @@ public sealed class PlacementStoreTests
         var placement = PlacementStore.Load(path);
 
         Assert.NotNull(placement);
-        Assert.Equal(WidgetSize.MinWidthDip, placement!.Value.WidthDip);
-        Assert.Equal(WidgetSize.MaxHeightDip, placement.Value.HeightDip);
+        // The height reference (9000/216 ≈ 41.7) lands past every preset, so the largest wins.
+        Assert.Equal(WidgetSize.ForScale(1.25), placement!.Value.Size);
     }
 
     [Fact]

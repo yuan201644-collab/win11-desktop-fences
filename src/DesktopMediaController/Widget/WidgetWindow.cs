@@ -76,18 +76,6 @@ internal sealed class WidgetWindow
     /// </remarks>
     private static readonly TimeSpan LyricInterval = TimeSpan.FromMilliseconds(50);
 
-    /// <summary>
-    /// Width, in DIPs, of the band along each edge that resizes instead of moving the card.
-    /// </summary>
-    /// <remarks>
-    /// Has to stay inside the card's outer margin (10–12 DIPs), because the bands and the buttons would
-    /// otherwise compete for the same pixels — the close button is 10 DIPs from the right edge and the
-    /// transport row 10 from the bottom, so 6 leaves both alone. Mouse-down still gives way to a button
-    /// regardless, so the worst case is a resize that will not start rather than a button that will not
-    /// press.
-    /// </remarks>
-    private const double ResizeBandDip = 6;
-
     private readonly HwndSource _source;
     private readonly WidgetCard _card;
     private readonly IntPtr _hwnd;
@@ -98,10 +86,6 @@ internal sealed class WidgetWindow
     private readonly DispatcherTimer _lyricTimer;
 
     private bool _dragging;
-    private bool _resizing;
-    private ResizeEdge _resizeEdge;
-    private ResizeEdge _hoverEdge;
-    private WidgetSize _grabSize;
     private (int X, int Y) _grabCursor;
     private ScreenRect _grabBounds;
 
@@ -206,12 +190,14 @@ internal sealed class WidgetWindow
         _card.MouseLeftButtonDown += OnCardMouseDown;
         _card.MouseMove += OnCardMouseMove;
         _card.MouseLeftButtonUp += OnCardMouseUp;
-        _card.MouseLeave += OnCardMouseLeave;
         _card.ToggleRequested += OnToggleRequested;
         _card.NextRequested += OnNextRequested;
         _card.PreviousRequested += OnPreviousRequested;
         _card.SourceSwitchRequested += OnSourceSwitchRequested;
         _card.PinRequested += OnPinRequested;
+        // A scale change rebuilds the window's measured size (SizeToContent follows the card's layout
+        // transform), so it settles and saves exactly like the end of a drag does.
+        _card.ScaleChanged += OnScaleChanged;
 
         // Low priority: repainting the card must never compete with a drag or a resize. Ticks that
         // land while a refresh is still in flight are dropped rather than queued (see SmtcMediaSource).
@@ -480,23 +466,9 @@ internal sealed class WidgetWindow
         // Anything that wants the click for itself (the close button, the transport row) gets it.
         if (e.OriginalSource is ButtonBase) return;
 
-        var edge = HitTestEdge(e.GetPosition(_card));
-
         _grabCursor = WidgetNative.CursorPosition();
         _grabBounds = WidgetNative.BoundsOf(_hwnd);
-
-        if (edge == ResizeEdge.None)
-        {
-            _dragging = true;
-        }
-        else
-        {
-            // The size is captured in DIPs alongside the physical bounds, because the cursor moves in
-            // physical pixels while the card is sized in DIPs and the two only agree at 100%.
-            _resizing = true;
-            _resizeEdge = edge;
-            _grabSize = _card.CardSize;
-        }
+        _dragging = true;
 
         _card.CaptureMouse();
         e.Handled = true;
@@ -504,134 +476,21 @@ internal sealed class WidgetWindow
 
     private void OnCardMouseMove(object sender, MouseEventArgs e)
     {
-        if (!_dragging && !_resizing)
-        {
-            UpdateHoverCursor(e.GetPosition(_card));
-            return;
-        }
+        if (!_dragging) return;
 
+        // Absolute tracking, not accumulated deltas: every frame recomputes from the grab point, so
+        // the window cannot creep away from the cursor the way delta accumulation does.
         var (x, y) = WidgetNative.CursorPosition();
-
-        if (_dragging)
-        {
-            // Absolute tracking, not accumulated deltas: every frame recomputes from the grab point, so
-            // the window cannot creep away from the cursor the way delta accumulation does.
-            WidgetNative.MoveTo(_hwnd, _grabBounds.X + (x - _grabCursor.X), _grabBounds.Y + (y - _grabCursor.Y));
-            return;
-        }
-
-        ResizeTo(x, y);
+        WidgetNative.MoveTo(_hwnd, _grabBounds.X + (x - _grabCursor.X), _grabBounds.Y + (y - _grabCursor.Y));
     }
 
     private void OnCardMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (!_dragging && !_resizing) return;
+        if (!_dragging) return;
 
         _dragging = false;
-        _resizing = false;
-        _resizeEdge = ResizeEdge.None;
         _card.ReleaseMouseCapture();
         SettleAndSave();
-    }
-
-    private void OnCardMouseLeave(object sender, MouseEventArgs e)
-    {
-        if (_dragging || _resizing || _hoverEdge == ResizeEdge.None) return;
-        _hoverEdge = ResizeEdge.None;
-        _card.Cursor = Cursors.Arrow;
-    }
-
-    /// <summary>
-    /// Resizes the card to follow the cursor, holding the edge opposite the one being dragged still.
-    /// </summary>
-    /// <remarks>
-    /// Only the card's <i>design</i> size is changed; the window follows through <c>SizeToContent</c>.
-    /// The origin then has to be moved for the west and north edges, because WPF grows a window from its
-    /// top-left: without that, dragging the left edge leftwards would leave the edge behind and instead
-    /// stretch the card to the right. Moving the window is a position-only operation and is exactly
-    /// what the drag path already does — it is the <i>size</i> that must never be set directly.
-    /// </remarks>
-    private void ResizeTo(int cursorX, int cursorY)
-    {
-        // Queried per move rather than cached: the card can be dragged across the boundary between the
-        // 100% and 125% monitors mid-gesture, and a cached scale would then be wrong by 25%.
-        var dpi = VisualTreeHelper.GetDpi(_card);
-
-        var size = WidgetSize.Coerce(
-            HorizontalSize(cursorX, dpi.DpiScaleX),
-            VerticalSize(cursorY, dpi.DpiScaleY));
-
-        _card.SetCardSize(size);
-
-        var x = _grabBounds.X;
-        var y = _grabBounds.Y;
-        if (_resizeEdge.HasFlag(ResizeEdge.West)) x = _grabBounds.Right - Physical(size.WidthDip, dpi.DpiScaleX);
-        if (_resizeEdge.HasFlag(ResizeEdge.North)) y = _grabBounds.Bottom - Physical(size.HeightDip, dpi.DpiScaleY);
-
-        WidgetNative.MoveTo(_hwnd, x, y);
-    }
-
-    private double HorizontalSize(int cursorX, double scale)
-    {
-        if (!_resizeEdge.HasFlag(ResizeEdge.West) && !_resizeEdge.HasFlag(ResizeEdge.East))
-        {
-            return _grabSize.WidthDip;
-        }
-
-        var delta = (cursorX - _grabCursor.X) / scale;
-        return _resizeEdge.HasFlag(ResizeEdge.West) ? _grabSize.WidthDip - delta : _grabSize.WidthDip + delta;
-    }
-
-    private double VerticalSize(int cursorY, double scale)
-    {
-        if (!_resizeEdge.HasFlag(ResizeEdge.North) && !_resizeEdge.HasFlag(ResizeEdge.South))
-        {
-            return _grabSize.HeightDip;
-        }
-
-        var delta = (cursorY - _grabCursor.Y) / scale;
-        return _resizeEdge.HasFlag(ResizeEdge.North) ? _grabSize.HeightDip - delta : _grabSize.HeightDip + delta;
-    }
-
-    private static int Physical(double dip, double scale) => (int)Math.Round(dip * scale);
-
-    /// <summary>Which edges the point is within <see cref="ResizeBandDip"/> of, if any.</summary>
-    private ResizeEdge HitTestEdge(Point point)
-    {
-        var width = _card.ActualWidth;
-        var height = _card.ActualHeight;
-        if (width <= 0 || height <= 0) return ResizeEdge.None;
-
-        var edge = ResizeEdge.None;
-        if (point.X <= ResizeBandDip) edge |= ResizeEdge.West;
-        else if (point.X >= width - ResizeBandDip) edge |= ResizeEdge.East;
-
-        if (point.Y <= ResizeBandDip) edge |= ResizeEdge.North;
-        else if (point.Y >= height - ResizeBandDip) edge |= ResizeEdge.South;
-
-        return edge;
-    }
-
-    /// <summary>
-    /// Shows the resize cursor over an edge. Without it the ability is undiscoverable — nothing else on
-    /// the card advertises that its border can be dragged.
-    /// </summary>
-    private void UpdateHoverCursor(Point point)
-    {
-        var edge = HitTestEdge(point);
-        if (edge == _hoverEdge) return;
-
-        _hoverEdge = edge;
-        _card.Cursor = edge switch
-        {
-            ResizeEdge.West or ResizeEdge.East => Cursors.SizeWE,
-            ResizeEdge.North or ResizeEdge.South => Cursors.SizeNS,
-            ResizeEdge.North | ResizeEdge.West => Cursors.SizeNWSE,
-            ResizeEdge.South | ResizeEdge.East => Cursors.SizeNWSE,
-            ResizeEdge.North | ResizeEdge.East => Cursors.SizeNESW,
-            ResizeEdge.South | ResizeEdge.West => Cursors.SizeNESW,
-            _ => Cursors.Arrow,
-        };
     }
 
     /// <summary>Pulls the window back onto a real monitor and persists where and how big it ended up.</summary>
@@ -664,6 +523,12 @@ internal sealed class WidgetWindow
     /// <summary>Persists the color the user just picked, mirroring how the pin is saved on toggle.</summary>
     private void OnThemeChanged(object? sender, CardTheme theme) =>
         CardThemeStore.Save(CardThemeStore.DefaultFilePath, theme);
+
+    /// <summary>
+    /// Persists a scale change the way a drag-end is persisted: position re-clamped, size written back
+    /// from the card (which reports the scaled DIP size the window is actually showing).
+    /// </summary>
+    private void OnScaleChanged(object? sender, double scale) => SettleAndSave();
 
     /// <summary>
     /// Whether the card is on screen right now. Read back from the window rather than from our own
@@ -746,21 +611,10 @@ internal sealed class WidgetWindow
         // Crossing a monitor boundary changes the physical size, and a window that was flush against
         // the right edge before the growth can end up poking off-screen after it. Re-clamp whenever
         // the size changes for any reason - but never mid-gesture, where it would fight the cursor.
-        if (msg == WM_SIZE && !_dragging && !_resizing)
+        if (msg == WM_SIZE && !_dragging)
         {
             MoveTo(ClampToScreen());
         }
         return IntPtr.Zero;
-    }
-
-    /// <summary>Which edges of the card a gesture is anchored to.</summary>
-    [Flags]
-    private enum ResizeEdge
-    {
-        None = 0,
-        North = 1,
-        South = 2,
-        West = 4,
-        East = 8,
     }
 }

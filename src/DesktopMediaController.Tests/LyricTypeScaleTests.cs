@@ -13,13 +13,14 @@ namespace DesktopMediaController.Tests;
 /// </remarks>
 public sealed class LyricTypeScaleTests
 {
-    /// <summary>The default card, and the width its text column gets (440 - 36 chrome - 74 cover).</summary>
-    private const double StandardHeight = 176;
-    private const double StandardTextWidth = 330;
+    /// <summary>The design card (620x216), and the width its text column gets:
+    /// 620 − 2 border − 214 cover − 30 column margins − 28 panel padding.</summary>
+    private const double StandardHeight = 216;
+    private const double StandardTextWidth = 346;
 
-    /// <summary>The card the ellipsis was seen on: 441x255, cover 107.1, so a 297.9 DIP text column.</summary>
-    private const double TallHeight = 255;
-    private const double TallTextWidth = 298;
+    /// <summary>The 125% preset: 775x270, cover 268, so a 433 DIP text column.</summary>
+    private const double TallHeight = 270;
+    private const double TallTextWidth = 432;
 
     [Fact]
     public void Measure_AtTheDesignSize_ReproducesTheDesignNumbers()
@@ -27,12 +28,12 @@ public sealed class LyricTypeScaleTests
         var fit = LyricTypeScale.Measure(StandardHeight, StandardTextWidth, 10);
 
         Assert.Equal(1d, fit.BlockScale, 1e-9);
-        Assert.Equal(22d, fit.CurrentFontSize, 1e-9);
+        Assert.Equal(19d, fit.CurrentFontSize, 1e-9);
         Assert.Equal(13d, fit.ContextFontSize, 1e-9);
-        Assert.Equal(31d, fit.CurrentRowHeight, 1e-9);
+        Assert.Equal(27d, fit.CurrentRowHeight, 1e-9);
         Assert.Equal(18d, fit.ContextRowHeight, 1e-9);
 
-        // 18 + 31 + 18 has to fit the slot the card leaves for lyrics, or the rows are clipped.
+        // 18 + 27 + 18 has to fit the slot the card leaves for lyrics, or the rows are clipped.
         Assert.True(fit.AreaHeight <= StandardHeight - LyricTypeScale.ChromeDip);
     }
 

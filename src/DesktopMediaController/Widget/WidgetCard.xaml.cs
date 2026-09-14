@@ -21,17 +21,18 @@ namespace DesktopMediaController.Widget;
 /// </remarks>
 public sealed partial class WidgetCard : UserControl
 {
-    /// <summary>Smallest the cover is allowed to get, so it stays recognisable at the minimum card height.</summary>
-    private const double CoverMinDip = 64;
-
-    /// <summary>Largest the cover is allowed to get, so a very tall card does not become all artwork.</summary>
-    private const double CoverMaxDip = 160;
+    // ---- design geometry -----------------------------------------------------------------------
 
     /// <summary>
-    /// How much of the card's height the cover takes. A share rather than a fixed size so the artwork
-    /// grows with the card: a resizable card whose contents stayed put would just add empty space.
+    /// Everything on the right of the cover that is not lyric text: shell border, column margins,
+    /// the lyric panel's own padding. The cover column is the card height minus the two border
+    /// pixels, so the text column's width is width − cover − this.
     /// </summary>
-    private const double CoverHeightShare = 0.42;
+    /// <remarks>
+    /// <see cref="LyricTypeScale"/> owns how much of that column the lyric type may use; this is the
+    /// part of the sum that only the card's own XAML knows about, so it stays here.
+    /// </remarks>
+    private const double NonTextChromeDip = 60;
 
     // Drawn rather than typed: "⏯" and "⏸" are missing from plenty of fonts and would silently render
     // as tofu boxes on a machine that has them missing.
@@ -39,15 +40,6 @@ public sealed partial class WidgetCard : UserControl
     private static readonly Geometry PauseGeometry = Frozen("M2,1 H5.2 V11 H2 Z M7.4,1 H10.6 V11 H7.4 Z");
 
     // ---- lyric metrics ------------------------------------------------------------------------
-
-    /// <summary>
-    /// Everything the text column does not get: shell border, grid margins, cover, its gap.
-    /// </summary>
-    /// <remarks>
-    /// <see cref="LyricTypeScale"/> owns how much of that column the lyric type may use; this is the
-    /// part of the sum that only the card's own XAML knows about, so it stays here.
-    /// </remarks>
-    private const double NonTextChromeDip = 36;
 
     /// <summary>
     /// How long one line change takes to scroll through, for all four rows at once.
@@ -88,7 +80,13 @@ public sealed partial class WidgetCard : UserControl
     /// <summary>The pin button at rest: the same near-white as its neighbours.</summary>
     private static readonly Brush UnpinnedBrush = FrozenBrush(0x8C, 0xFF, 0xFF, 0xFF);
 
-    private WidgetSize _size;
+    private WidgetSize _size = WidgetSize.Base;
+
+    /// <summary>The scale preset currently applied through the layout transform.</summary>
+    private double _scale = 1d;
+
+    /// <summary>The lyric panel's fill, derived from the theme's background and rebuilt with it.</summary>
+    private Brush PanelBrush = FrozenBrush(0x13, 0x13, 0x17);
 
     /// <summary>The full theme currently shown, so the color menu can tweak one channel (e.g. background)
     /// without losing the others. Kept in step by <see cref="ApplyTheme"/>.</summary>
@@ -211,10 +209,12 @@ public sealed partial class WidgetCard : UserControl
         _theme = theme;
         SungBrush = ToFrozenBrush(theme.Sung);
         PinnedBrush = ToFrozenBrush(theme.Label);
+        PanelBrush = ToFrozenBrush(CardPalette.PanelFromBackground(theme.Background));
 
         Shell.BorderBrush = ToFrozenBrush(theme.Border);
         Shell.Background = ToFrozenBrush(theme.Background);
-        ProgressFill.Background = ToFrozenBrush(theme.Progress);
+        CoverArea.Background = ToFrozenBrush(theme.Accent);
+        LyricPanel.Background = PanelBrush;
         SourceButton.Foreground = ToFrozenBrush(theme.Label);
 
         RefreshLyricColors();
@@ -240,6 +240,9 @@ public sealed partial class WidgetCard : UserControl
     /// <summary>Kept so the menu can re-sync its controls to the live theme each time it opens.</summary>
     private TextBox? _bgHexBox;
     private Slider? _transparencySlider;
+
+    /// <summary>The size section's items, so the menu can re-mark the active preset on every open.</summary>
+    private readonly MenuItem[] _scaleItems = new MenuItem[WidgetSize.Scales.Length];
 
     /// <summary>
     /// Builds the right-click color picker. Two independent sections — accent (the single primary that
@@ -281,16 +284,44 @@ public sealed partial class WidgetCard : UserControl
         restore.Click += (_, _) => ChooseTheme(CardTheme.Default);
         _themeMenu.Items.Add(restore);
 
+        // Size presets. The card's ratio is fixed — the presets are the only way to resize — and the
+        // active one is marked with a check mark that SyncMenuControls refreshes on every open.
+        _themeMenu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
+        _themeMenu.Items.Add(HeaderLabel("大小"));
+
+        var scaleRow = new WrapPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
+        for (var i = 0; i < WidgetSize.Scales.Length; i++)
+        {
+            var scale = WidgetSize.Scales[i];
+            var item = new MenuItem
+            {
+                Foreground = new SolidColorBrush(Colors.White),
+                FocusVisualStyle = null,
+                Template = FlatMenuItemTemplate(),
+            };
+            item.Click += (_, _) => SetScale(scale);
+            _scaleItems[i] = item;
+            scaleRow.Children.Add(item);
+        }
+        _themeMenu.Items.Add(scaleRow);
+
         ContextMenu = _themeMenu;
     }
 
-    /// <summary>Re-syncs the background hex box and transparency slider to the live theme on every open.</summary>
+    /// <summary>Re-syncs the background hex box, transparency slider and scale marks to the live state on every open.</summary>
     private void SyncMenuControls()
     {
         if (_bgHexBox is { } box)
             box.Text = $"#{_theme.Background.R:X2}{_theme.Background.G:X2}{_theme.Background.B:X2}";
         if (_transparencySlider is { } slider)
             slider.Value = Math.Round(_theme.Background.A * 100.0 / 255.0);
+
+        for (var i = 0; i < _scaleItems.Length; i++)
+        {
+            if (_scaleItems[i] is not { } item) continue;
+            var active = Math.Abs(WidgetSize.Scales[i] - _scale) < 0.01;
+            item.Header = (active ? "✓ " : "    ") + $"{WidgetSize.Scales[i] * 100:0}%";
+        }
     }
 
     private static Button MakeSwatch(ArgbColor fill, string toolTip)
@@ -603,33 +634,57 @@ public sealed partial class WidgetCard : UserControl
     /// <summary>Raised when the user clicks the player name to move to the next player.</summary>
     public event EventHandler? SourceSwitchRequested;
 
-    /// <summary>The card's current design size. The window's physical size is derived from it.</summary>
+    /// <summary>
+    /// The card's current size, <i>as persisted</i>: the design geometry multiplied by the active
+    /// scale preset. The window's physical size is derived from it.
+    /// </summary>
     internal WidgetSize CardSize => _size;
 
+    /// <summary>The scale preset currently applied: one of <see cref="WidgetSize.Scales"/>.</summary>
+    internal double CurrentScale => _scale;
+
+    /// <summary>Raised after the user picks a scale preset, so the host can persist it.</summary>
+    internal event EventHandler<double>? ScaleChanged;
+
     /// <summary>
-    /// Changes the card's design size, which is <b>the only way to resize the window</b>.
+    /// Moves the card onto a scale preset. The card renders one design geometry —
+    /// <see cref="WidgetSize.Base"/> — and the preset is a layout transform over it, so no metric
+    /// below the transform ever changes: the lyric block's arithmetic, the cover column, the panel
+    /// padding are all computed exactly once, against exactly one geometry.
     /// </summary>
     /// <remarks>
-    /// The window's <c>SizeToContent</c> is <c>WidthAndHeight</c>, so the window follows its content
-    /// rather than the other way round: setting the window's size directly is undone on the next layout
-    /// pass, and doing it by hand once inflated a 360×112 card to 1906×670 inside a single drag. Going
-    /// through the content also means the DPI story stays untouched — WPF recomputes the physical size
-    /// from these DIP values whenever the monitor scale changes.
+    /// The window's <c>SizeToContent</c> is <c>WidthAndHeight</c>, so it follows the transformed
+    /// measure rather than the other way round. Doing it by hand once inflated a 360×112 card to
+    /// 1906×670 inside a single drag; going through the content also keeps the DPI story untouched —
+    /// WPF recomputes the physical size from these DIP values whenever the monitor scale changes.
     /// </remarks>
     internal void SetCardSize(WidgetSize size)
     {
-        var coerced = WidgetSize.Coerce(size.WidthDip, size.HeightDip);
-        _size = coerced;
+        SetScale(WidgetSize.NearestScale(size.WidthDip, size.HeightDip));
+    }
 
-        Width = coerced.WidthDip;
-        Height = coerced.HeightDip;
+    /// <summary>Applies a scale preset and reports it, for the right-click menu's size section.</summary>
+    internal void SetScale(double scale)
+    {
+        _scale = scale;
+        _size = WidgetSize.ForScale(scale);
 
-        var cover = Math.Clamp(coerced.HeightDip * CoverHeightShare, CoverMinDip, CoverMaxDip);
-        CoverColumn.Width = new GridLength(cover);
-        CoverBorder.Width = cover;
-        CoverBorder.Height = cover;
+        Width = WidgetSize.BaseWidthDip;
+        Height = WidgetSize.BaseHeightDip;
 
-        ApplyLyricMetrics(coerced.HeightDip, coerced.WidthDip - NonTextChromeDip - cover);
+        var transform = new ScaleTransform(scale, scale);
+        transform.Freeze();
+        LayoutTransform = transform;
+
+        // The cover is full-height and flush with the shell border, so it is a square of the design
+        // height minus that border's two pixels — the art fills the rounded corner, the corner clips it.
+        CoverColumn.Width = new GridLength(WidgetSize.BaseHeightDip - 2);
+
+        ApplyLyricMetrics(
+            WidgetSize.BaseHeightDip,
+            WidgetSize.BaseWidthDip - (WidgetSize.BaseHeightDip - 2) - NonTextChromeDip);
+
+        ScaleChanged?.Invoke(this, scale);
     }
 
     /// <summary>
@@ -725,7 +780,8 @@ public sealed partial class WidgetCard : UserControl
         SourceText.Text = sourceName;
         var showSource = !string.IsNullOrEmpty(sourceName);
         SourceButton.Visibility = showSource ? Visibility.Visible : Visibility.Collapsed;
-        SeparatorText.Visibility = showSource ? Visibility.Visible : Visibility.Collapsed;
+
+        PaintCoverPlaceholder(session);
 
         TimeText.Text = $"{PlaybackProgress.Format(session.Position)} / "
                       + $"{PlaybackProgress.Format(session.Duration)}";
@@ -1046,9 +1102,13 @@ public sealed partial class WidgetCard : UserControl
         TitleText.Text = "未连接到播放器";
         ArtistText.Text = "打开播放器后自动显示";
         SourceButton.Visibility = Visibility.Collapsed;
-        SeparatorText.Visibility = Visibility.Collapsed;
         TimeText.Text = string.Empty;
         SetProgress(0d);
+
+        // The sleeve goes back to its resting placeholder: no album name, just the note glyph.
+        CoverAlbumText.Text = string.Empty;
+        CoverAlbumText.Visibility = Visibility.Collapsed;
+        CoverInitialText.Text = "\u266A";
 
         ToggleIcon.Data = PlayGeometry;
         ToggleButton.IsEnabled = false;
@@ -1068,6 +1128,25 @@ public sealed partial class WidgetCard : UserControl
         var hasCover = CoverImage.Source is not null;
         CoverImage.Visibility = hasCover ? Visibility.Visible : Visibility.Collapsed;
         CoverPlaceholder.Visibility = hasCover ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>
+    /// The record-sleeve placeholder shown while there is no artwork: the album title along the top
+    /// and its initial set large at the bottom, over the accent block. The accent is already the
+    /// card's "this is the music" colour, so the sleeve reads as part of the theme rather than as a
+    /// broken image.
+    /// </summary>
+    private void PaintCoverPlaceholder(MediaSessionInfo session)
+    {
+        var album = session.Album;
+        CoverAlbumText.Text = album;
+        CoverAlbumText.Visibility = album.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        // The initial comes from the album when there is one, else the title. Split by text element,
+        // not char, so a surrogate-pair lead (an emoji album title) stays whole.
+        var source = album.Length > 0 ? album : session.Title;
+        var elements = TextElements.Split(source);
+        CoverInitialText.Text = elements.Length > 0 ? elements[0].ToUpperInvariant() : "\u266A";
     }
 
     private void SetProgress(double fraction)

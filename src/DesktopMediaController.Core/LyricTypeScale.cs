@@ -35,10 +35,11 @@ namespace DesktopMediaController.Core;
 /// </remarks>
 public static class LyricTypeScale
 {
-    // ---- the design, measured on a 440x176 card -----------------------------------------------
+    // ---- the design, measured on the 620x216 card ----------------------------------------------
 
-    /// <summary>Everything on the card that is not lyric block: chrome, the other rows, the margins.</summary>
-    public const double ChromeDip = 105;
+    /// <summary>Everything on the card that is not lyric block: shell border, header, title, the
+    /// panel's own padding, progress, transport, margins.</summary>
+    public const double ChromeDip = 145;
 
     /// <summary>Height of the whole three-line block at the default card size.</summary>
     public const double DesignAreaDip = 71;
@@ -47,14 +48,15 @@ public static class LyricTypeScale
     /// Design type sizes and row heights.
     /// </summary>
     /// <remarks>
-    /// The middle row is deliberately 1.69x the outer two. The budget at the default size is
-    /// 18 + 31 + 18 = 67 DIP against 71 available, so a four-DIP cushion absorbs rounding. Letting the
-    /// emphasised line wrap to two rows instead would need 97 DIP of a 67 DIP budget.
+    /// The middle row is deliberately larger than the outer two — the emphasised line is the one
+    /// worth reading, and the size gap is what separates it from its neighbours. The budget at the
+    /// design size is 18 + 27 + 18 = 63 DIP against 71 available, so an eight-DIP cushion absorbs
+    /// rounding. Letting the emphasised line wrap to two rows instead would blow the budget.
     /// </remarks>
     public const double ContextFont = 13;
-    public const double CurrentFont = 22;
+    public const double CurrentFont = 19;
     public const double ContextRow = 18;
-    public const double CurrentRow = 31;
+    public const double CurrentRow = 27;
 
     /// <summary>
     /// Bounds on how far the block may scale with the card.

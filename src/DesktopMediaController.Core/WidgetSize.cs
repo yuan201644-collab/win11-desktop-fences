@@ -11,51 +11,87 @@ namespace DesktopMediaController.Core;
 /// scale. Storing the derived quantity would double-apply the scale on the next launch.
 /// </para>
 /// <para>
-/// The bounds are what the card can actually render rather than a matter of taste. Below the minimum,
-/// three lyric lines plus the cover art stop fitting and the layout collapses into overlap; above the
-/// maximum, the card stops looking like a card.
+/// The card has exactly one design size, <see cref="Base"/>: the card renders that geometry and
+/// scaling happens through the card's layout transform. A size is therefore always a scale preset
+/// multiplied out, and <see cref="Coerce"/> snaps whatever it is handed — a drag leftover, an old
+/// file's free size — onto the nearest preset. That is what makes the ratio fixed: nothing can
+/// express an off-ratio size any more, only a bigger or smaller copy of the same card.
 /// </para>
 /// </remarks>
 public readonly record struct WidgetSize(double WidthDip, double HeightDip)
 {
-    /// <summary>Narrower than this and the transport row and cover start colliding.</summary>
-    public const double MinWidthDip = 320;
+    /// <summary>The one design geometry: 620x216, a 2.87:1 card with a full-height cover column.</summary>
+    public const double BaseWidthDip = 620;
 
-    /// <summary>Shorter than this and three lyric lines no longer fit.</summary>
-    public const double MinHeightDip = 140;
+    public const double BaseHeightDip = 216;
 
-    public const double MaxWidthDip = 1600;
+    /// <summary>The design size. Everything on the card is measured against exactly this.</summary>
+    public static readonly WidgetSize Base = new(BaseWidthDip, BaseHeightDip);
 
-    public const double MaxHeightDip = 900;
-
-    /// <summary>
-    /// The size the card is born at. Larger than the pre-lyrics card (360×112) because three lyric
-    /// lines need the room, and because a card that is resizable anyway may as well start usable.
-    /// </summary>
-    public static readonly WidgetSize Default = new(440, 176);
+    /// <summary>What a card is born at, and what an unusable file falls back to. Same as <see cref="Base"/>.</summary>
+    public static readonly WidgetSize Default = Base;
 
     /// <summary>
-    /// Whether these numbers describe a size the card can actually be. False for a missing size — which
-    /// is exactly what an older <c>placement.json</c>, written before the card was resizable, contains.
+    /// The only sizes that exist: the design size and its scaled copies. The presets, not a free
+    /// range, are the whole point — a fixed ratio keeps the cover square and the three lyric rows
+    /// in the panel at every size.
     /// </summary>
+    public static readonly double[] Scales = [0.75, 1.0, 1.25];
+
+    /// <summary>Whether these numbers describe something renderable. Only sanity, not the ratio —
+    /// <see cref="Coerce"/> is what enforces the ratio.</summary>
     public bool IsUsable =>
         double.IsFinite(WidthDip) && double.IsFinite(HeightDip) &&
-        WidthDip >= MinWidthDip && HeightDip >= MinHeightDip;
+        WidthDip > 0 && HeightDip > 0;
 
     /// <summary>
-    /// Turns whatever a drag produced — or whatever an old settings file contained — into a size the
-    /// card can render.
+    /// The scale preset closest to what the given numbers describe, judged on height first.
     /// </summary>
     /// <remarks>
-    /// A non-positive or non-finite value means "not specified", and falls back to
-    /// <see cref="Default"/> rather than being clamped up to the minimum: an old file has no opinion
-    /// about size, whereas a drag that ran into the limit has a very definite one. Each axis is judged
-    /// on its own, so a file that specified only one of them keeps the one it did specify.
+    /// Height is the reference because the cover column and the lyric block both hang off it; a
+    /// missing or nonsensical height falls back to the width, and if neither axis says anything the
+    /// default scale wins. A placement.json from the free-resize era (e.g. 440x176) lands on 0.75 —
+    /// 176/216 sits between the presets, and the smaller one is the honest reading of "the card was
+    /// this small".
     /// </remarks>
-    public static WidgetSize Coerce(double widthDip, double heightDip) => new(
-        Axis(widthDip, MinWidthDip, MaxWidthDip, Default.WidthDip),
-        Axis(heightDip, MinHeightDip, MaxHeightDip, Default.HeightDip));
+    public static double NearestScale(double widthDip, double heightDip)
+    {
+        double reference;
+        if (double.IsFinite(heightDip) && heightDip > 0)
+            reference = heightDip / BaseHeightDip;
+        else if (double.IsFinite(widthDip) && widthDip > 0)
+            reference = widthDip / BaseWidthDip;
+        else
+            return 1.0;
 
-    private static double Axis(double value, double min, double max, double fallback) =>
-        !double.IsFinite(value) || value <= 0 ? fallback : Math.Clamp(value, min, max);
+        var best = Scales[0];
+        var bestDistance = Math.Abs(reference - best);
+        for (var i = 1; i < Scales.Length; i++)
+        {
+            var distance = Math.Abs(reference - Scales[i]);
+            if (distance < bestDistance)
+            {
+                best = Scales[i];
+                bestDistance = distance;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>The design geometry multiplied out to <paramref name="scale"/>.</summary>
+    public static WidgetSize ForScale(double scale) =>
+        new(Math.Round(BaseWidthDip * scale, 3), Math.Round(BaseHeightDip * scale, 3));
+
+    /// <summary>
+    /// Turns whatever was handed in — a drag leftover, an old settings file, garbage — into a size
+    /// the card can actually render: the nearest scale preset.
+    /// </summary>
+    /// <remarks>
+    /// A non-positive or non-finite axis means "no opinion", and both fall through to the default
+    /// scale rather than being guessed at. Old files that predate the fixed ratio are snapped, not
+    /// rejected: their intent ("about this big") survives, their exact ratio does not.
+    /// </remarks>
+    public static WidgetSize Coerce(double widthDip, double heightDip) =>
+        ForScale(NearestScale(widthDip, heightDip));
 }

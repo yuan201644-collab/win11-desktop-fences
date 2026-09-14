@@ -15,7 +15,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Chrome"
                                 Background="{TemplateBinding Background}"
-                                CornerRadius="6">
+                                CornerRadius="9">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -38,86 +38,95 @@
         </Style>
     </UserControl.Resources>
 
-    <!-- ClipToBounds because the card is freely resizable: at a small size the lyric block must be
-         cut off rather than drawn over the progress bar. -->
-    <Border x:Name="Shell" CornerRadius="14"
+    <!-- Design size is ALWAYS 620x216 (WidgetSize.Base). Scaling happens through the card's
+         LayoutTransform — a scale preset, never a free resize — so every metric below is a constant
+         and the lyric block's arithmetic runs against exactly one geometry. -->
+    <!-- ClipToBounds because the shell's rounded corners must clip the full-height cover art. -->
+    <Border x:Name="Shell" CornerRadius="20"
             Background="#E81A1A20"
             BorderBrush="#4D87C5FF"
             BorderThickness="1"
             ClipToBounds="True">
-        <!-- The margins are what the resize bands sit inside (see WidgetWindow.HitTestEdge), so nothing
-             here may be closer than ~8px to an edge or the two would fight over the same pixels. -->
-        <Grid Margin="12,10,10,10">
+        <Grid>
             <Grid.ColumnDefinitions>
-                <!-- Width is assigned in code: the cover keeps its apparent size in step with the
-                     card's height, and a square has to be sized in one place. -->
-                <ColumnDefinition x:Name="CoverColumn" Width="64" />
-                <ColumnDefinition Width="12" />
+                <!-- The cover is full-height and flush with the left edge; the width is set in code
+                     (height minus the two border pixels) so art and card stay a perfect square. -->
+                <ColumnDefinition x:Name="CoverColumn" Width="214" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <!-- Cover art. The glyph stays as the placeholder for sources that publish no thumbnail
-                 (and for the idle state); the Image sits on top once one decodes. -->
-            <Border x:Name="CoverBorder" Grid.Column="0" Width="64" Height="64" CornerRadius="8"
-                    Background="#26FFFFFF" ClipToBounds="True" VerticalAlignment="Center">
-                <Grid>
-                    <TextBlock x:Name="CoverPlaceholder" Text="&#x266A;" FontSize="24"
-                               Foreground="#8CFFFFFF"
-                               HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    <Image x:Name="CoverImage" Stretch="UniformToFill" Visibility="Collapsed" />
-                </Grid>
-            </Border>
+            <!-- Cover art. When the source publishes no thumbnail the accent block stands in, with
+                 the album title top-left and its initial bottom-left, like a minimal record sleeve. -->
+            <Grid x:Name="CoverArea" Grid.Column="0" ClipToBounds="True">
+                <StackPanel x:Name="CoverPlaceholder">
+                    <TextBlock x:Name="CoverAlbumText" Text="" FontSize="11" Margin="12,10,12,0"
+                               Foreground="#BFFFFFFF" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="CoverInitialText" Text="&#x266A;" FontSize="32" FontWeight="SemiBold"
+                               Margin="12,0,12,10" Foreground="#FFFFFF"
+                               HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Image x:Name="CoverImage" Stretch="UniformToFill" Visibility="Collapsed" />
+            </Grid>
 
-            <Grid Grid.Column="2">
+            <Grid Grid.Column="1" Margin="12,10,14,10">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
-                    <!-- The lyric block. Star-sized so it absorbs whatever extra height a resize gives
-                         the card, instead of leaving the slack in one place. -->
+                    <!-- The lyric panel. Star-sized so it absorbs the layout's rounding slack; the
+                         canvas inside keeps a fixed height, so the slack never moves the text. -->
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <!-- Title + pin + close. The close button is docked so a long title ellipsises before
-                     it; the pin sits beside it because both are card-level commands, not playback
-                     ones. -->
-                <DockPanel Grid.Row="0">
+                <!-- Header: the source chip on the left (with its note icon), pin and close on the
+                     right. The chip is a button — with two players running, switching is one click
+                     away — and the icon is a fixed decorative mark, not a source logo. -->
+                <DockPanel Grid.Row="0" LastChildFill="False">
                     <Button x:Name="CloseButton" DockPanel.Dock="Right"
                             Style="{StaticResource IconButton}"
                             Width="20" Height="20" Margin="6,0,0,0"
                             FontSize="10" Foreground="#B3FFFFFF"
                             Content="&#x2715;" ToolTip="隐藏到托盘（音乐继续播放，右键托盘图标退出）"
                             Click="OnCloseClick" />
-                    <!-- Glyphs from Segoe MDL2 Assets, the same set the shell's own pin buttons use:
-                         E718 is the pin, E77A the un-pin. The card swaps them in code — see
-                         WidgetCard.SetPinnedVisual — rather than keeping two buttons in step. -->
+                    <!-- Glyphs from Segoe MDL2 Assets: E718 is the pin, E77A the un-pin. The card
+                         swaps them in code — see WidgetCard.SetPinnedVisual. -->
                     <Button x:Name="PinButton" DockPanel.Dock="Right"
                             Style="{StaticResource IconButton}"
                             Width="20" Height="20"
                             FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#8CFFFFFF"
                             Content="&#xE718;" ToolTip="固定在最上层（让卡片浮在所有软件之上）"
                             Click="OnPinClick" />
-                    <TextBlock x:Name="TitleText" Text="未连接到播放器"
-                               FontSize="13.5" FontWeight="SemiBold" Foreground="#F2FFFFFF"
-                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                </DockPanel>
-
-                <!-- Artist, then a clickable source chip: with two players running, the automatic
-                     choice cannot always be the wanted one, so switching is one click away. -->
-                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,0">
-                    <TextBlock x:Name="ArtistText" Text="打开播放器后自动显示" FontSize="11"
-                               Foreground="#A6FFFFFF" TextTrimming="CharacterEllipsis"
-                               VerticalAlignment="Center" />
-                    <TextBlock x:Name="SeparatorText" Text="  ·  " FontSize="11"
-                               Foreground="#59FFFFFF" VerticalAlignment="Center"
-                               Visibility="Collapsed" />
-                    <Button x:Name="SourceButton" Style="{StaticResource IconButton}"
-                            Padding="5,1" FontSize="10" Foreground="#B3D6FF"
+                    <Button x:Name="SourceButton" DockPanel.Dock="Left"
+                            Style="{StaticResource IconButton}"
+                            Padding="4,2,9,2" VerticalAlignment="Center"
+                            Foreground="#B3D6FF"
                             Visibility="Collapsed" Click="OnSourceClick"
                             ToolTip="点击切换到下一个播放器">
-                        <TextBlock x:Name="SourceText" Text="" />
+                        <StackPanel Orientation="Horizontal">
+                            <!-- Fixed colors on purpose: the gold-and-green note reads as "music",
+                                 not as a theme channel. -->
+                            <Border Width="14" Height="14" CornerRadius="7" Background="#FFD700">
+                                <TextBlock Text="&#x266A;" FontSize="9" FontWeight="SemiBold"
+                                           Foreground="#31C27C"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock x:Name="SourceText" Text="" FontSize="11" Margin="5,0,0,0"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
                     </Button>
+                </DockPanel>
+
+                <!-- Title and artist on one line: the title is the card's largest type, the artist a
+                     quiet grey beside it. A long title ellipsises; the artist follows it in trim. -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="2,5,0,0">
+                    <TextBlock x:Name="TitleText" Text="未连接到播放器"
+                               FontSize="21" FontWeight="SemiBold" Foreground="#F2FFFFFF"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Baseline" />
+                    <TextBlock x:Name="ArtistText" Text="打开播放器后自动显示" FontSize="13"
+                               Margin="12,0,0,0" Foreground="#B0FFFFFF"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Baseline" />
                 </StackPanel>
 
                 <!-- Lyrics: the line being sung, with one either side for context, over a fourth row
@@ -133,49 +142,51 @@
                      sits exactly at the clip's bottom edge, which is what makes filling it in invisible.
 
                      No wrapping: a wrapped line would grow into its neighbours and make the card's
-                     height depend on the words, which a resizable window cannot afford. A long line
-                     ellipsises instead — which is why each row is given the text column's width in code
-                     rather than sizing to its own text, as a Canvas child otherwise would.
+                     height depend on the words. A long line ellipsises instead — which is why each row
+                     is given the text column's width in code rather than sizing to its own text, as a
+                     Canvas child otherwise would.
 
-                     The sizes below are the design values for the default 440x176 card; SetCardSize
-                     recomputes the canvas height, the row offsets and the type from the card's height so
-                     the block grows with the card and still fits at the minimum size. -->
-                <Grid Grid.Row="2" Margin="0,4,0,4" ClipToBounds="True">
-                    <Canvas x:Name="LyricLines" Height="67" VerticalAlignment="Center" ClipToBounds="True">
-                        <TextBlock x:Name="LyricRow0" Canvas.Top="0" FontSize="13"
-                                   Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="LyricRow1" Canvas.Top="18" FontSize="22"
-                                   TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="LyricRow2" Canvas.Top="49" FontSize="13"
-                                   Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="LyricRow3" Canvas.Top="67" FontSize="13"
-                                   Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
-                    </Canvas>
-                    <!-- Shown instead of the rows when there is nothing to scroll. The area keeps its
-                         size either way, so the card never changes height on its own. -->
-                    <TextBlock x:Name="LyricStatus" VerticalAlignment="Center"
-                               FontSize="13" Foreground="#73FFFFFF"
-                               TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
-                </Grid>
+                     The panel (deeper than the card background, rounded) is what separates the block
+                     from the title and progress rows visually; its brush is derived from the theme's
+                     background so both stay one colour family. -->
+                <Border x:Name="LyricPanel" Grid.Row="2" CornerRadius="10" Padding="14,6"
+                        Margin="0,8,0,8" Background="#131317">
+                    <Grid ClipToBounds="True">
+                        <Canvas x:Name="LyricLines" Height="63" VerticalAlignment="Center" ClipToBounds="True">
+                            <TextBlock x:Name="LyricRow0" Canvas.Top="0" FontSize="13"
+                                       Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="LyricRow1" Canvas.Top="18" FontSize="19"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="LyricRow2" Canvas.Top="45" FontSize="13"
+                                       Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="LyricRow3" Canvas.Top="63" FontSize="13"
+                                       Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
+                        </Canvas>
+                        <!-- Shown instead of the rows when there is nothing to scroll. The area keeps its
+                             size either way, so the card never changes height on its own. -->
+                        <TextBlock x:Name="LyricStatus" VerticalAlignment="Center"
+                                   FontSize="13" Foreground="#73FFFFFF"
+                                   TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
+                    </Grid>
+                </Border>
 
                 <!-- Read-only progress. Two star columns rather than a ProgressBar: the ratio is then
                      set directly and there is no control template to fight with. QQ音乐 reports
-                     seek=false, so a draggable bar would be a lie. -->
-                <Grid Grid.Row="3" Height="4" Margin="0,0,0,0" VerticalAlignment="Center">
+                     seek=false, so a draggable bar would be a lie. White fill on purpose: the accent
+                     already lives in the sung prefix and the source chip. -->
+                <Grid Grid.Row="3" Height="4" VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition x:Name="ProgressFilledColumn" Width="0*" />
                         <ColumnDefinition x:Name="ProgressRemainingColumn" Width="1*" />
                     </Grid.ColumnDefinitions>
                     <Border Grid.ColumnSpan="2" CornerRadius="2" Background="#33FFFFFF" />
                     <Border x:Name="ProgressFill" Grid.Column="0" CornerRadius="2"
-                            Background="#87C5FF" />
+                            Background="#FFFFFF" />
                 </Grid>
 
-                <DockPanel Grid.Row="4" Margin="0,6,0,0" VerticalAlignment="Bottom">
-                    <TextBlock x:Name="TimeText" DockPanel.Dock="Right" Text="" FontSize="10"
-                               Foreground="#8CFFFFFF" VerticalAlignment="Center" Margin="8,0,0,0" />
-
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- Elapsed/total on the left, transport on the right. -->
+                <DockPanel Grid.Row="4" Margin="2,7,0,0" LastChildFill="False">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                         <Button x:Name="PreviousButton" Style="{StaticResource IconButton}"
                                 Width="30" Height="26" Margin="0,0,4,0"
                                 ToolTip="上一首" Click="OnPreviousClick">
@@ -192,6 +203,8 @@
                             <Path Fill="#E6FFFFFF" Data="M1,1 L8.4,6 L1,11 Z M9.4,1 H11 V11 H9.4 Z" />
                         </Button>
                     </StackPanel>
+                    <TextBlock x:Name="TimeText" Text="" FontSize="12"
+                               Foreground="#AAFFFFFF" VerticalAlignment="Center" />
                 </DockPanel>
             </Grid>
         </Grid>

@@ -58,6 +58,24 @@ public static class CardPalette
             Background: CardTheme.DarkBackground);
     }
 
+    /// <summary>
+    /// The lyric panel's fill: the card background pushed one step darker, so the panel reads as an
+    /// inset of the card while staying in the same colour family. Derived, not a fourth channel —
+    /// one less thing for the color menu to expose.
+    /// </summary>
+    public static ArgbColor PanelFromBackground(ArgbColor background) => Darken(background, 0.72);
+
+    /// <summary>Scales a colour's RGB toward black, keeping its alpha. <paramref name="factor"/> of 0
+    /// gives black, 1 gives the input untouched.</summary>
+    public static ArgbColor Darken(ArgbColor c, double factor)
+    {
+        var f = Math.Clamp(factor, 0d, 1d);
+        return ArgbColor.FromArgb(c.A,
+            (byte)Math.Round(c.R * f),
+            (byte)Math.Round(c.G * f),
+            (byte)Math.Round(c.B * f));
+    }
+
     private static ArgbColor Lighten(ArgbColor c, float t) =>
         ArgbColor.FromArgb(c.A,
             (byte)(c.R + (255 - c.R) * t),
