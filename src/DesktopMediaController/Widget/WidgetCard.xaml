@@ -16,19 +16,22 @@
                         <Border x:Name="Chrome"
                                 Background="{TemplateBinding Background}"
                                 CornerRadius="9">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <ContentPresenter x:Name="Content" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
+                            <!-- Hover/press feedback is the content's opacity, not a wash: a white wash
+                                 dies on a light background and a dark one on a dark background, while the
+                                 content is always the themed tier and dims the same either way. -->
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#26FFFFFF" />
+                                <Setter TargetName="Content" Property="Opacity" Value="0.72" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Chrome" Property="Background" Value="#3DFFFFFF" />
+                                <Setter TargetName="Content" Property="Opacity" Value="0.5" />
                             </Trigger>
                             <!-- A player that cannot do something gets an obviously dead button
                                  rather than a live one that silently does nothing. -->
                             <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Chrome" Property="Opacity" Value="0.28" />
+                                <Setter TargetName="Content" Property="Opacity" Value="0.28" />
                                 <Setter Property="Cursor" Value="Arrow" />
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -178,14 +181,15 @@
 
                 <!-- Read-only progress. Two star columns rather than a ProgressBar: the ratio is then
                      set directly and there is no control template to fight with. QQ音乐 reports
-                     seek=false, so a draggable bar would be a lie. White fill on purpose: the accent
-                     already lives in the sung prefix and the source chip. -->
+                     seek=false, so a draggable bar would be a lie. Fill/groove are neutral tiers that
+                     flip with the background (see CardTextTiers): white on dark, ink on light — the
+                     accent already lives in the sung prefix and the source chip. -->
                 <Grid Grid.Row="3" Height="4" VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition x:Name="ProgressFilledColumn" Width="0*" />
                         <ColumnDefinition x:Name="ProgressRemainingColumn" Width="1*" />
                     </Grid.ColumnDefinitions>
-                    <Border Grid.ColumnSpan="2" CornerRadius="2" Background="#33FFFFFF" />
+                    <Border x:Name="ProgressTrack" Grid.ColumnSpan="2" CornerRadius="2" Background="#33FFFFFF" />
                     <Border x:Name="ProgressFill" Grid.Column="0" CornerRadius="2"
                             Background="#FFFFFF" />
                 </Grid>
@@ -196,7 +200,7 @@
                         <Button x:Name="PreviousButton" Style="{StaticResource IconButton}"
                                 Width="30" Height="26" Margin="0,0,4,0"
                                 ToolTip="上一首" Click="OnPreviousClick">
-                            <Path Fill="#E6FFFFFF" Data="M1,1 H2.6 V11 H1 Z M11,1 L3.6,6 L11,11 Z" />
+                            <Path x:Name="PreviousIcon" Fill="#E6FFFFFF" Data="M1,1 H2.6 V11 H1 Z M11,1 L3.6,6 L11,11 Z" />
                         </Button>
                         <Button x:Name="ToggleButton" Style="{StaticResource IconButton}"
                                 Width="30" Height="26" Margin="0,0,4,0"
@@ -206,7 +210,7 @@
                         <Button x:Name="NextButton" Style="{StaticResource IconButton}"
                                 Width="30" Height="26"
                                 ToolTip="下一首" Click="OnNextClick">
-                            <Path Fill="#E6FFFFFF" Data="M1,1 L8.4,6 L1,11 Z M9.4,1 H11 V11 H9.4 Z" />
+                            <Path x:Name="NextIcon" Fill="#E6FFFFFF" Data="M1,1 L8.4,6 L1,11 Z M9.4,1 H11 V11 H9.4 Z" />
                         </Button>
                     </StackPanel>
                     <TextBlock x:Name="TimeText" Text="" FontSize="12"

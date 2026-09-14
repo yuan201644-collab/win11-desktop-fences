@@ -59,7 +59,9 @@ public sealed partial class WidgetCard : UserControl
     // brush; the paint loop still compares brushes by reference and early-outs on unchanged runs. Only
     // the two accent-aware brushes move with the theme — the white tiers stay static.
     private Brush SungBrush = FrozenBrush(0x8F, 0xC5, 0xFF);
-    private static readonly Brush CurrentBrush = FrozenBrush(0xFF, 0xFF, 0xFF);
+
+    /// <summary>Current line's not-yet-sung prefix. Instance, not static: a light background flips it to ink.</summary>
+    private Brush CurrentBrush = FrozenBrush(0xFF, 0xFF, 0xFF);
 
     /// <summary>
     /// Everything that is not being sung right now: the lines above and below, and the part of the
@@ -72,13 +74,16 @@ public sealed partial class WidgetCard : UserControl
     /// line's colour is continuous through the entire motion: the only thing that happens when a line
     /// becomes current is that it grows, which is exactly what the motion is about.
     /// </remarks>
-    private static readonly Brush IdleBrush = FrozenBrush(0x59, 0xFF, 0xFF, 0xFF);
+    private Brush IdleBrush = FrozenBrush(0x59, 0xFF, 0xFF, 0xFF);
 
     /// <summary>The pin button's accent — the source-label blue, the card's established "interactive" tint.</summary>
     private Brush PinnedBrush = FrozenBrush(0xB3, 0xD6, 0xFF);
 
-    /// <summary>The pin button at rest: the same near-white as its neighbours.</summary>
-    private static readonly Brush UnpinnedBrush = FrozenBrush(0x8C, 0xFF, 0xFF, 0xFF);
+    /// <summary>The pin button at rest. Instance, not static: a light background flips it to ink.</summary>
+    private Brush UnpinnedBrush = FrozenBrush(0x8C, 0xFF, 0xFF, 0xFF);
+
+    /// <summary>The progress groove behind the fill. Instance, not static: it flips with the background.</summary>
+    private Brush ProgressTrackBrush = FrozenBrush(0x33, 0xFF, 0xFF, 0xFF);
 
     private WidgetSize _size = WidgetSize.Base;
 
@@ -202,9 +207,9 @@ public sealed partial class WidgetCard : UserControl
     internal event EventHandler<CardTheme>? ThemeChanged;
 
     /// <summary>
-    /// Applies an accent theme: rebuilds the two accent-aware lyric brushes as fresh frozen brushes and
-    /// repaints the XAML accents (border, progress fill, source chip, pin). The neutral white tiers and
-    /// the dark background are fixed in XAML and untouched.
+    /// Applies a theme: rebuilds the accent brushes, repaints the accent-tinted surfaces, and flips
+    /// every neutral text/glyph tier to the family the background's lightness calls for — whites on a
+    /// dark background, ink on a light one.
     /// </summary>
     /// <remarks>
     /// Brushes are replaced wholesale rather than mutated, and never via <c>DynamicResource</c>: the paint
@@ -223,6 +228,25 @@ public sealed partial class WidgetCard : UserControl
         CoverArea.Background = ToFrozenBrush(theme.Accent);
         LyricPanel.Background = PanelBrush;
         SourceButton.Foreground = ToFrozenBrush(theme.Label);
+
+        // The neutral tiers are one family or the other — no per-channel tuning, no third family.
+        // The accent (sung prefix, source chip) is the user's pick and deliberately never moves.
+        var tiers = CardTextTiers.For(theme.Background);
+        CurrentBrush = ToFrozenBrush(tiers.IconStrong);
+        IdleBrush = ToFrozenBrush(tiers.LyricIdle);
+        UnpinnedBrush = ToFrozenBrush(tiers.PinGlyph);
+        ProgressTrackBrush = ToFrozenBrush(tiers.ProgressTrack);
+
+        TitleText.Foreground = ToFrozenBrush(tiers.Title);
+        ArtistText.Foreground = ToFrozenBrush(tiers.Secondary);
+        TimeText.Foreground = ToFrozenBrush(tiers.Time);
+        LyricStatus.Foreground = ToFrozenBrush(tiers.LyricStatus);
+        CloseButton.Foreground = ToFrozenBrush(tiers.CloseGlyph);
+        ProgressFill.Background = ToFrozenBrush(tiers.ProgressFill);
+        ProgressTrack.Background = ProgressTrackBrush;
+        PreviousIcon.Fill = ToFrozenBrush(tiers.Icon);
+        NextIcon.Fill = ToFrozenBrush(tiers.Icon);
+        ToggleIcon.Fill = ToFrozenBrush(tiers.IconStrong);
 
         RefreshLyricColors();
         SetPinnedVisual(_pinned);

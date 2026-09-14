@@ -65,6 +65,22 @@ public static class CardPalette
     /// </summary>
     public static ArgbColor PanelFromBackground(ArgbColor background) => Darken(background, 0.72);
 
+    /// <summary>
+    /// Perceived brightness of the background on the 0–255 YIQ luma scale — the cheap standard for
+    /// "will white text survive on this". Alpha is ignored on purpose: the slider scales the whole
+    /// card's translucency and the desktop behind it is unknowable, so the picked colour is what the
+    /// decision is made on.
+    /// </summary>
+    public static int Luma(ArgbColor c) => (299 * c.R + 587 * c.G + 114 * c.B) / 1000;
+
+    /// <summary>Luma at or above which the neutral text tiers flip to the ink family.</summary>
+    /// <remarks>145 sits between the darkest background preset's luma (26) and the light preset's
+    /// (232) with room on both sides; mid-greys near it are genuinely ambiguous either way.</remarks>
+    public const int LightBackgroundLuma = 145;
+
+    /// <summary>True when the neutral whites must flip to ink for the text to stay readable.</summary>
+    public static bool IsLightBackground(ArgbColor background) => Luma(background) >= LightBackgroundLuma;
+
     /// <summary>Scales a colour's RGB toward black, keeping its alpha. <paramref name="factor"/> of 0
     /// gives black, 1 gives the input untouched.</summary>
     public static ArgbColor Darken(ArgbColor c, double factor)

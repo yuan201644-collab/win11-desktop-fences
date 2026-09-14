@@ -171,4 +171,47 @@ public sealed class CardPaletteTests
                 $"panel {panel} not darker than background {opaque}");
         }
     }
+
+    [Theory]
+    [InlineData(0xFF, 0x1A, 0x1A, 0x20, false)] // near-black preset
+    [InlineData(0xFF, 0x00, 0x00, 0x00, false)] // black preset
+    [InlineData(0xFF, 0x10, 0x18, 0x26, false)] // dark blue preset
+    [InlineData(0xFF, 0x22, 0x2A, 0x36, false)] // slate preset
+    [InlineData(0xFF, 0xE8, 0xE8, 0xEC, true)]  // light preset
+    [InlineData(0xFF, 0xFF, 0xFF, 0xFF, true)]  // pure white
+    public void IsLightBackground_ClassifiesThePresets(byte a, byte r, byte g, byte b, bool expected)
+    {
+        Assert.Equal(expected, CardPalette.IsLightBackground(ArgbColor.FromArgb(a, r, g, b)));
+    }
+
+    [Fact]
+    public void Luma_IsTheYiqWeightedSum()
+    {
+        // 299*0x87 + 587*0xC5 + 114*0xFF = 185074, over 1000 = 185.
+        Assert.Equal(185, CardPalette.Luma(ArgbColor.FromArgb(0xFF, 0x87, 0xC5, 0xFF)));
+    }
+
+    [Fact]
+    public void TextTiers_PickOneFamilyOrTheOther_NeverAThird()
+    {
+        Assert.Equal(CardTextTiers.Dark, CardTextTiers.For(CardTheme.Default.Background));
+        Assert.Equal(CardTextTiers.Light, CardTextTiers.For(ArgbColor.FromArgb(0xFF, 0xFF, 0xFF, 0xFF)));
+
+        // The two families share the alpha structure — only the base colour moves — so the flip
+        // changes nothing but readability.
+        Assert.Equal(CardTextTiers.Dark.Title.A, CardTextTiers.Light.Title.A);
+        Assert.Equal(CardTextTiers.Dark.LyricIdle.A, CardTextTiers.Light.LyricIdle.A);
+        Assert.Equal(CardTextTiers.Dark.Time.A, CardTextTiers.Light.Time.A);
+    }
+
+    [Fact]
+    public void TextTiers_LightFamilyIsDarkEnoughAgainstItsBackground()
+    {
+        // The ink tiers exist to be readable on light backgrounds; every opaque tier must be far
+        // darker in luma than the lightest background preset.
+        foreach (var tier in new[] { CardTextTiers.Light.Title, CardTextTiers.Light.IconStrong, CardTextTiers.Light.ProgressFill })
+        {
+            Assert.True(CardPalette.Luma(tier) < 60, $"tier {tier} too bright for a light background");
+        }
+    }
 }
