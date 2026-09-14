@@ -147,6 +147,11 @@ internal sealed class WidgetWindow
     {
         _card = new WidgetCard(WidgetSize.Default);
         _card.CloseRequested += OnCloseRequested;
+        _card.ThemeChanged += OnThemeChanged;
+
+        // Applies the saved accent (or the default if there is none / it is corrupt). Done once at
+        // startup so the card's colors are correct before the first paint.
+        _card.ApplyTheme(CardThemeStore.Load(CardThemeStore.DefaultFilePath));
 
         var screen = WidgetNative.VirtualScreen();
         var start = PlacementStore.Load(PlacementStore.DefaultFilePath) ?? WidgetPlacement.FirstRun(screen);
@@ -655,6 +660,10 @@ internal sealed class WidgetWindow
 
     /// <summary>The card's close button. Hides rather than quits — see <see cref="HideCard"/>.</summary>
     private void OnCloseRequested(object? sender, EventArgs e) => HideCard();
+
+    /// <summary>Persists the color the user just picked, mirroring how the pin is saved on toggle.</summary>
+    private void OnThemeChanged(object? sender, CardTheme theme) =>
+        CardThemeStore.Save(CardThemeStore.DefaultFilePath, theme);
 
     /// <summary>
     /// Whether the card is on screen right now. Read back from the window rather than from our own

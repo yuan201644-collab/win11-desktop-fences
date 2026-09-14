@@ -63,7 +63,10 @@ public sealed partial class WidgetCard : UserControl
     // Frozen statics, because the paint loop compares brushes by reference to decide whether anything
     // changed. Handing WPF a fresh-but-equal brush would invalidate the render on every syllable for
     // no visible reason.
-    private static readonly Brush SungBrush = FrozenBrush(0x8F, 0xC5, 0xFF);
+    // Instance fields rather than frozen statics so a theme change can swap in a freshly built frozen
+    // brush; the paint loop still compares brushes by reference and early-outs on unchanged runs. Only
+    // the two accent-aware brushes move with the theme — the white tiers stay static.
+    private Brush SungBrush = FrozenBrush(0x8F, 0xC5, 0xFF);
     private static readonly Brush CurrentBrush = FrozenBrush(0xFF, 0xFF, 0xFF);
 
     /// <summary>
@@ -80,12 +83,16 @@ public sealed partial class WidgetCard : UserControl
     private static readonly Brush IdleBrush = FrozenBrush(0x59, 0xFF, 0xFF, 0xFF);
 
     /// <summary>The pin button's accent — the source-label blue, the card's established "interactive" tint.</summary>
-    private static readonly Brush PinnedBrush = FrozenBrush(0xB3, 0xD6, 0xFF);
+    private Brush PinnedBrush = FrozenBrush(0xB3, 0xD6, 0xFF);
 
     /// <summary>The pin button at rest: the same near-white as its neighbours.</summary>
     private static readonly Brush UnpinnedBrush = FrozenBrush(0x8C, 0xFF, 0xFF, 0xFF);
 
     private WidgetSize _size;
+
+    /// <summary>The full theme currently shown, so the color menu can tweak one channel (e.g. background)
+    /// without losing the others. Kept in step by <see cref="ApplyTheme"/>.</summary>
+    private CardTheme _theme = CardTheme.Default;
 
     /// <summary>
     /// The type scale the block settled on for the current card size, and the width of the text column.
@@ -161,6 +168,12 @@ public sealed partial class WidgetCard : UserControl
 
     private bool _scrolling;
 
+    /// <summary>Whether the user has pinned the card, mirrored from the window so a theme change can repaint the pin.</summary>
+    private bool _pinned;
+
+    /// <summary>The last lyric window painted, so a theme change can repaint the rows with the new accent.</summary>
+    private LyricsWindow? _lastLyrics;
+
     public WidgetCard(WidgetSize size)
     {
         InitializeComponent();
@@ -175,7 +188,287 @@ public sealed partial class WidgetCard : UserControl
         Apply(MediaSnapshot.Idle);
         ApplyLyrics(null, LyricsState.Idle);
         SetCardSize(size);
+        BuildThemeMenu();
     }
+
+    // ---- theme ---------------------------------------------------------------------------------
+
+    /// <summary>Raised after the user picks a color, so the host can persist it.</summary>
+    internal event EventHandler<CardTheme>? ThemeChanged;
+
+    /// <summary>
+    /// Applies an accent theme: rebuilds the two accent-aware lyric brushes as fresh frozen brushes and
+    /// repaints the XAML accents (border, progress fill, source chip, pin). The neutral white tiers and
+    /// the dark background are fixed in XAML and untouched.
+    /// </summary>
+    /// <remarks>
+    /// Brushes are replaced wholesale rather than mutated, and never via <c>DynamicResource</c>: the paint
+    /// loop compares brushes by reference to skip unchanged runs, and a <c>DynamicResource</c> would defeat
+    /// that early-out — re-introducing the per-syllable twitch this card exists to avoid.
+    /// </remarks>
+    internal void ApplyTheme(CardTheme theme)
+    {
+        _theme = theme;
+        SungBrush = ToFrozenBrush(theme.Sung);
+        PinnedBrush = ToFrozenBrush(theme.Label);
+
+        Shell.BorderBrush = ToFrozenBrush(theme.Border);
+        Shell.Background = ToFrozenBrush(theme.Background);
+        ProgressFill.Background = ToFrozenBrush(theme.Progress);
+        SourceButton.Foreground = ToFrozenBrush(theme.Label);
+
+        RefreshLyricColors();
+        SetPinnedVisual(_pinned);
+    }
+
+    /// <summary>Repaints the lyric rows with the new accent. A scroll in flight is landed first.</summary>
+    private void RefreshLyricColors()
+    {
+        if (_lastLyrics is { } lyrics)
+        {
+            FinishScroll();
+            Paint(lyrics);
+        }
+    }
+
+    private static Brush ToFrozenBrush(ArgbColor c) => FrozenBrush(c.A, c.R, c.G, c.B);
+
+    // ---- theme menu ----------------------------------------------------------------------------
+
+    private readonly ContextMenu _themeMenu = new();
+
+    /// <summary>Kept so the menu can re-sync its controls to the live theme each time it opens.</summary>
+    private TextBox? _bgHexBox;
+    private Slider? _transparencySlider;
+
+    /// <summary>
+    /// Builds the right-click color picker. Two independent sections — accent (the single primary that
+    /// derives the lyric / progress / border tints) and background (its own colour plus a transparency
+    /// slider). All interactive controls opt out of the default focus rectangle, which otherwise draws a
+    /// blue box around whatever was just clicked and read as a glitch.
+    /// </summary>
+    private void BuildThemeMenu()
+    {
+        _themeMenu.Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x1E, 0x1E, 0x24));
+        _themeMenu.Foreground = new SolidColorBrush(Colors.White);
+        // Neutral chrome, not the accent — a blue menu frame read as a glitch.
+        _themeMenu.BorderBrush = new SolidColorBrush(Color.FromArgb(0xFF, 0x3A, 0x3A, 0x42));
+        _themeMenu.BorderThickness = new Thickness(1);
+        _themeMenu.Padding = new Thickness(8);
+        _themeMenu.Opened += (_, _) => SyncMenuControls();
+
+        _themeMenu.Items.Add(HeaderLabel("主题色"));
+        _themeMenu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
+        _themeMenu.Items.Add(BuildAccentSwatches());
+
+        _themeMenu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
+        _themeMenu.Items.Add(BuildAccentCustom());
+
+        _themeMenu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
+        _themeMenu.Items.Add(HeaderLabel("背景颜色"));
+        _themeMenu.Items.Add(BuildBackgroundSwatches());
+
+        _themeMenu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
+        _themeMenu.Items.Add(BuildBackgroundCustom());
+
+        _themeMenu.Items.Add(new Separator { Margin = new Thickness(0, 4, 0, 4) });
+        _themeMenu.Items.Add(BuildTransparencySlider());
+
+        var restore = new MenuItem { Header = "恢复默认配色", Foreground = new SolidColorBrush(Colors.White), FocusVisualStyle = null };
+        restore.Click += (_, _) => ChooseTheme(CardTheme.Default);
+        _themeMenu.Items.Add(restore);
+
+        ContextMenu = _themeMenu;
+    }
+
+    /// <summary>Re-syncs the background hex box and transparency slider to the live theme on every open.</summary>
+    private void SyncMenuControls()
+    {
+        if (_bgHexBox is { } box)
+            box.Text = $"#{_theme.Background.R:X2}{_theme.Background.G:X2}{_theme.Background.B:X2}";
+        if (_transparencySlider is { } slider)
+            slider.Value = Math.Round(_theme.Background.A * 100.0 / 255.0);
+    }
+
+    private static Button MakeSwatch(ArgbColor fill, string toolTip)
+    {
+        return new Button
+        {
+            Width = 22, Height = 22, Margin = new Thickness(2),
+            Background = ToFrozenBrush(fill),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(1),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = toolTip,
+            Focusable = false, FocusVisualStyle = null,
+        };
+    }
+
+    private UIElement BuildAccentSwatches()
+    {
+        var grid = new WrapPanel { Orientation = Orientation.Horizontal, MaxWidth = 162, ItemWidth = 26, ItemHeight = 26 };
+        foreach (var theme in CardPalette.Presets)
+        {
+            var swatch = MakeSwatch(theme.Accent, theme.Accent.ToString());
+            // An accent preset changes only the accent; the user's background choice is kept.
+            var captured = theme;
+            swatch.Click += (_, _) => ChooseTheme(captured with { Background = _theme.Background });
+            grid.Children.Add(swatch);
+        }
+        return grid;
+    }
+
+    private UIElement BuildAccentCustom()
+    {
+        var custom = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        var box = new TextBox
+        {
+            Width = 92, Height = 22, Text = "#87C5FF",
+            Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x30, 0x30, 0x38)),
+            Foreground = new SolidColorBrush(Colors.White),
+            // Neutral border, and no focus rectangle.
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0xFF, 0x4A, 0x4A, 0x55)),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(4, 0, 4, 0),
+            FocusVisualStyle = null,
+        };
+        var apply = new Button
+        {
+            Content = "自定义", Margin = new Thickness(6, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2),
+            Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x3A, 0x6E, 0xA5)),
+            Foreground = new SolidColorBrush(Colors.White),
+            BorderThickness = new Thickness(0), Cursor = System.Windows.Input.Cursors.Hand,
+            Focusable = false, FocusVisualStyle = null,
+        };
+        apply.Click += (_, _) =>
+        {
+            var parsed = ArgbColor.Parse(box.Text);
+            if (parsed is { } color)
+            {
+                var theme = CardPalette.FromPrimary(color) with { Background = _theme.Background };
+                ApplyTheme(theme);
+                ThemeChanged?.Invoke(this, theme);
+                _themeMenu.IsOpen = false;
+            }
+            else
+            {
+                box.Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x60, 0x20, 0x20));
+            }
+        };
+        custom.Children.Add(box);
+        custom.Children.Add(apply);
+        return custom;
+    }
+
+    private UIElement BuildBackgroundSwatches()
+    {
+        var grid = new WrapPanel { Orientation = Orientation.Horizontal, MaxWidth = 162, ItemWidth = 26, ItemHeight = 26 };
+        foreach (var hue in CardPalette.BackgroundPresets)
+        {
+            var swatch = MakeSwatch(hue, hue.ToString());
+            var captured = hue;
+            swatch.Click += (_, _) => ChooseBackground(captured);
+            grid.Children.Add(swatch);
+        }
+        return grid;
+    }
+
+    private UIElement BuildBackgroundCustom()
+    {
+        var custom = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        var box = new TextBox
+        {
+            Width = 92, Height = 22, Text = "#1A1A20",
+            Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x30, 0x30, 0x38)),
+            Foreground = new SolidColorBrush(Colors.White),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0xFF, 0x4A, 0x4A, 0x55)),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(4, 0, 4, 0),
+            FocusVisualStyle = null,
+        };
+        _bgHexBox = box;
+        var apply = new Button
+        {
+            Content = "自定义", Margin = new Thickness(6, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2),
+            Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x3A, 0x6E, 0xA5)),
+            Foreground = new SolidColorBrush(Colors.White),
+            BorderThickness = new Thickness(0), Cursor = System.Windows.Input.Cursors.Hand,
+            Focusable = false, FocusVisualStyle = null,
+        };
+        apply.Click += (_, _) =>
+        {
+            var parsed = ArgbColor.Parse(box.Text);
+            if (parsed is { } color)
+            {
+                // Honour an explicit alpha (#RRGGBBAA); otherwise keep the current transparency.
+                var a = color.A == 0xFF ? _theme.Background.A : color.A;
+                var next = _theme with { Background = ArgbColor.FromArgb(a, color.R, color.G, color.B) };
+                ApplyTheme(next);
+                ThemeChanged?.Invoke(this, next);
+                _themeMenu.IsOpen = false;
+            }
+            else
+            {
+                box.Background = new SolidColorBrush(Color.FromArgb(0xFF, 0x60, 0x20, 0x20));
+            }
+        };
+        custom.Children.Add(box);
+        custom.Children.Add(apply);
+        return custom;
+    }
+
+    private UIElement BuildTransparencySlider()
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        var label = new TextBlock
+        {
+            Text = "透明度", Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0xA6, 0xA6, 0xB0)),
+            FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 8, 0),
+        };
+        var slider = new Slider
+        {
+            Width = 110, Minimum = 0, Maximum = 100, SmallChange = 1, LargeChange = 10,
+            Value = Math.Round(_theme.Background.A * 100.0 / 255.0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Focusable = false, FocusVisualStyle = null,
+        };
+        slider.ValueChanged += (_, e) =>
+        {
+            var a = (byte)Math.Round(e.NewValue * 255.0 / 100.0);
+            ApplyTheme(_theme with { Background = _theme.Background with { A = a } });
+        };
+        // Persist only when the drag ends, not on every tick of the slider.
+        slider.PreviewMouseUp += (_, _) => ThemeChanged?.Invoke(this, _theme);
+        _transparencySlider = slider;
+        panel.Children.Add(label);
+        panel.Children.Add(slider);
+        return panel;
+    }
+
+    /// <summary>Applies a background hue, keeping the card's current transparency.</summary>
+    private void ChooseBackground(ArgbColor hue)
+    {
+        var next = _theme with { Background = ArgbColor.FromArgb(_theme.Background.A, hue.R, hue.G, hue.B) };
+        ApplyTheme(next);
+        ThemeChanged?.Invoke(this, next);
+        _themeMenu.IsOpen = false;
+    }
+
+    private void ChooseTheme(CardTheme theme)
+    {
+        ApplyTheme(theme);
+        ThemeChanged?.Invoke(this, theme);
+        _themeMenu.IsOpen = false;
+    }
+
+    private static UIElement HeaderLabel(string text) =>
+        new TextBlock
+        {
+            Text = text,
+            Foreground = new SolidColorBrush(Color.FromArgb(0xFF, 0xA6, 0xA6, 0xB0)),
+            FontSize = 11,
+            Margin = new Thickness(2, 0, 0, 0),
+        };
 
     /// <summary>Raised when the user asks the widget to close.</summary>
     public event EventHandler? CloseRequested;
@@ -359,6 +652,7 @@ public sealed partial class WidgetCard : UserControl
             FinishScroll();
             _shownIndex = -1;
             _paint = LyricLinePaint.Empty;
+            _lastLyrics = null;
             LyricLines.Visibility = Visibility.Collapsed;
 
             LyricStatus.Text = state switch
@@ -376,6 +670,7 @@ public sealed partial class WidgetCard : UserControl
 
         LyricLines.Visibility = Visibility.Visible;
         LyricStatus.Visibility = Visibility.Collapsed;
+        _lastLyrics = lyrics;
 
         if (lyrics.CurrentIndex == _shownIndex)
         {
@@ -701,6 +996,7 @@ public sealed partial class WidgetCard : UserControl
     /// </remarks>
     internal void SetPinnedVisual(bool pinned)
     {
+        _pinned = pinned;
         PinButton.Content = pinned ? "\uE77A" : "\uE718";
         PinButton.Foreground = pinned ? PinnedBrush : UnpinnedBrush;
         PinButton.ToolTip = pinned
