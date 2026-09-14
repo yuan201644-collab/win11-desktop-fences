@@ -10,7 +10,7 @@ using DesktopMediaController.Services.Lyrics;
 namespace DesktopMediaController.Widget;
 
 /// <summary>
-/// The card the user actually sees: cover art, title, artist, three lines of scrolling lyrics, a
+/// The card the user actually sees: cover art, title, artist, four rows of scrolling lyrics, a
 /// read-only progress bar and transport buttons.
 /// </summary>
 /// <remarks>
@@ -399,14 +399,33 @@ public sealed partial class WidgetCard : UserControl
         _currentRow = 1;
         _row1Elements = lyrics.Current.ElementCount;
 
-        SetRow(0, lyrics.Previous, active: false);
-        SetRow(1, lyrics.Current.Text, active: true);
-        SetRow(2, lyrics.Next, active: false);
-        SetRow(3, string.Empty, active: false);
+        SetRow(0, lyrics.Previous, RowStyle.Past);
+        SetRow(1, lyrics.Current.Text, RowStyle.Active);
+        SetRow(2, lyrics.Next, RowStyle.Upcoming);
+        SetRow(3, string.Empty, RowStyle.Upcoming);
 
         var activeFont = FontFor(_row1Elements);
         ApplyFrame(PlanWith(activeFont, activeFont).Rest);
         PaintHighlight(lyrics.Current);
+    }
+
+    /// <summary>How a row that is not the one being sung is painted.</summary>
+    private enum RowStyle
+    {
+        /// <summary>A line below the active one: the idle colour, at full opacity.</summary>
+        Upcoming,
+
+        /// <summary>
+        /// A line above the active one. It keeps the sung colour and is dimmed instead of being
+        /// restyled, which is what makes the handover from "being sung" to "already sung" continuous:
+        /// the row leaving the middle slot is dimmed by the motion, not recoloured when it stops. It also
+        /// means a previous line looks the same however it got there — scrolled out, or painted after a
+        /// seek.
+        /// </summary>
+        Past,
+
+        /// <summary>The line being sung: one inline per character, so that the highlight can move.</summary>
+        Active,
     }
 
     /// <summary>
@@ -431,7 +450,7 @@ public sealed partial class WidgetCard : UserControl
     /// giving them that structure would be one more thing to keep in step for no visible gain.
     /// </para>
     /// </remarks>
-    private void SetRow(int row, string text, bool active)
+    private void SetRow(int row, string text, RowStyle style)
     {
         var block = _rows[row];
         var runs = _rowRuns[row];
@@ -440,7 +459,7 @@ public sealed partial class WidgetCard : UserControl
         runs.Clear();
         _rowTexts[row] = text;
 
-        if (active)
+        if (style == RowStyle.Active)
         {
             foreach (var element in TextElements.Split(text))
             {
@@ -453,11 +472,15 @@ public sealed partial class WidgetCard : UserControl
             // whatever the next caller paints — a rebuild and an unchanged range must not look alike.
             _paintedSung = -1;
             _paintedEnd = -1;
+            return;
         }
-        else if (text.Length > 0)
+
+        if (text.Length == 0) return;
+
+        block.Inlines.Add(new Run(text)
         {
-            block.Inlines.Add(new Run(text) { Foreground = IdleBrush });
-        }
+            Foreground = style == RowStyle.Past ? SungBrush : IdleBrush,
+        });
     }
 
     /// <summary>
@@ -469,7 +492,7 @@ public sealed partial class WidgetCard : UserControl
         // Only reachable if a caller hands over a window whose line is not the one the active row was
         // built from. Rebuilding is the safe answer; colouring the wrong glyphs is not.
         if (!string.Equals(_rowTexts[_currentRow], paint.Text, StringComparison.Ordinal))
-            SetRow(_currentRow, paint.Text, active: true);
+            SetRow(_currentRow, paint.Text, RowStyle.Active);
 
         var runs = _rowRuns[_currentRow];
         var sung = Math.Clamp(paint.SungElements, 0, runs.Count);
@@ -514,12 +537,12 @@ public sealed partial class WidgetCard : UserControl
         // Stage the row below the clip. It sits exactly on the clip's bottom edge, where it counts as
         // invisible, so filling it in here cannot be seen — and it has to be filled in before the motion
         // starts, or the last third of the motion would show an empty row rising into place.
-        SetRow(3, lyrics.Next, active: false);
+        SetRow(3, lyrics.Next, RowStyle.Upcoming);
 
         // The arriving line takes over the inlines now rather than at the end. A context row is a single
         // inline in the idle colour and the active row's unsung characters are painted in that same
         // colour, so the swap is invisible where it happens.
-        SetRow(2, lyrics.Current.Text, active: true);
+        SetRow(2, lyrics.Current.Text, RowStyle.Active);
         _currentRow = 2;
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
@@ -578,13 +601,15 @@ public sealed partial class WidgetCard : UserControl
         _rowTexts[1] = _rowTexts[2];
         _rowTexts[2] = _rowTexts[3];
 
-        // The line that has just been sung keeps its highlight as it leaves — it is the row that dims,
+        // The line that has just been sung keeps the sung colour as it leaves — it is the row that dims,
         // not the row that changes colour, which is what keeps the previous line from flickering grey at
-        // the exact moment the eye has followed it up there.
-        SetRow(0, _rowTexts[0], active: false);
-        SetRow(1, _rowTexts[1], active: true);
-        SetRow(2, _rowTexts[2], active: false);
-        SetRow(3, string.Empty, active: false);
+        // the exact moment the eye has followed it up there. A line changes only once the next one has
+        // started, by which point it has been sung through and is entirely in that colour, so rebuilding
+        // it here repaints the pixels that are already on screen.
+        SetRow(0, _rowTexts[0], RowStyle.Past);
+        SetRow(1, _rowTexts[1], RowStyle.Active);
+        SetRow(2, _rowTexts[2], RowStyle.Upcoming);
+        SetRow(3, string.Empty, RowStyle.Upcoming);
 
         _currentRow = 1;
         _row1Elements = _paint.ElementCount;
