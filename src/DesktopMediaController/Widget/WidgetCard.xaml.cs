@@ -176,6 +176,13 @@ public sealed partial class WidgetCard : UserControl
     {
         InitializeComponent();
 
+        // Round-clip the content: ClipToBounds is rectangular, so the full-height cover bled square
+        // over the shell's rounded corners. A constant, because everything below ScaleHost's
+        // transform is the one design geometry — the clip is that geometry minus the shell's 1px
+        // border, with the radius pulled in by the same pixel.
+        CardContent.Clip = new RectangleGeometry(
+            new Rect(0, 0, WidgetSize.BaseWidthDip - 2, WidgetSize.BaseHeightDip - 2), 19, 19);
+
         // Slot order, not visual order: see the field's comment. The rows are addressed as an array
         // because every animation applies to all four, and four copies of each call would be four
         // places to forget the fourth row in.
@@ -664,17 +671,25 @@ public sealed partial class WidgetCard : UserControl
     }
 
     /// <summary>Applies a scale preset and reports it, for the right-click menu's size section.</summary>
+    /// <remarks>
+    /// The transform lives on <see cref="ScaleHost"/>, not on the card. The card is the root visual of
+    /// an <see cref="HwndSource"/>, and SizeToContent does not honor a LayoutTransform on that root: the
+    /// window would open at the unscaled 620x216 while the content renders scaled, clipping the right
+    /// and bottom clean off. The card therefore states its scaled size explicitly — that is the size the
+    /// window takes — and the wrapper inside measures at the design geometry and renders scaled, so no
+    /// metric below the transform ever changes.
+    /// </remarks>
     internal void SetScale(double scale)
     {
         _scale = scale;
         _size = WidgetSize.ForScale(scale);
 
-        Width = WidgetSize.BaseWidthDip;
-        Height = WidgetSize.BaseHeightDip;
+        Width = _size.WidthDip;
+        Height = _size.HeightDip;
 
         var transform = new ScaleTransform(scale, scale);
         transform.Freeze();
-        LayoutTransform = transform;
+        ScaleHost.LayoutTransform = transform;
 
         // The cover is full-height and flush with the shell border, so it is a square of the design
         // height minus that border's two pixels — the art fills the rounded corner, the corner clips it.

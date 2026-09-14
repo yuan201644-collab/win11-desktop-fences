@@ -42,12 +42,18 @@
          LayoutTransform — a scale preset, never a free resize — so every metric below is a constant
          and the lyric block's arithmetic runs against exactly one geometry. -->
     <!-- ClipToBounds because the shell's rounded corners must clip the full-height cover art. -->
-    <Border x:Name="Shell" CornerRadius="20"
-            Background="#E81A1A20"
-            BorderBrush="#4D87C5FF"
-            BorderThickness="1"
-            ClipToBounds="True">
-        <Grid>
+    <!-- ScaleHost carries the scale preset's transform, NOT the card itself: the card is an
+         HwndSource's root visual, and SizeToContent does not honor a LayoutTransform there — the
+         window would open at the unscaled size and clip the content (seen 2026-09-14: a 125% card
+         in a 620x216 window). The card states its scaled size explicitly; this wrapper measures at
+         the design geometry and renders scaled. -->
+    <Grid x:Name="ScaleHost">
+        <Border x:Name="Shell" CornerRadius="20"
+                Background="#E81A1A20"
+                BorderBrush="#4D87C5FF"
+                BorderThickness="1"
+                ClipToBounds="True">
+            <Grid x:Name="CardContent">
             <Grid.ColumnDefinitions>
                 <!-- The cover is full-height and flush with the left edge; the width is set in code
                      (height minus the two border pixels) so art and card stay a perfect square. -->
@@ -209,4 +215,5 @@
             </Grid>
         </Grid>
     </Border>
+    </Grid>
 </UserControl>

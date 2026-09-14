@@ -1,4 +1,5 @@
 using System.Threading;
+using System.Windows.Media;
 using DesktopMediaController.Core;
 using DesktopMediaController.Widget;
 
@@ -35,8 +36,16 @@ public class WidgetCardBamlSmokeTests
             foreach (var scale in WidgetSize.Scales)
             {
                 var card = new WidgetCard(WidgetSize.ForScale(scale));
-                Assert.Equal(WidgetSize.BaseWidthDip, card.Width, 1e-6);
-                Assert.Equal(WidgetSize.BaseHeightDip, card.Height, 1e-6);
+
+                // The card states the SCALED size — an HwndSource's SizeToContent does not honor a
+                // LayoutTransform on its root visual, so the explicit size is what keeps the window
+                // from clipping the scaled content (the 2026-09-14 startup complaint).
+                Assert.Equal(WidgetSize.BaseWidthDip * scale, card.Width, 1e-6);
+                Assert.Equal(WidgetSize.BaseHeightDip * scale, card.Height, 1e-6);
+
+                var transform = Assert.IsAssignableFrom<Transform>(card.ScaleHost.LayoutTransform);
+                Assert.Equal(scale, ((ScaleTransform)transform).ScaleX, 1e-6);
+                Assert.Equal(scale, ((ScaleTransform)transform).ScaleY, 1e-6);
             }
         });
     }
