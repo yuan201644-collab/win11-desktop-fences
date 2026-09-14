@@ -85,6 +85,19 @@ internal sealed class WidgetWindow
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _lyricTimer;
 
+    /// <summary>
+    /// How often the default output device is re-read. Slow, because it only feeds a tooltip and the
+    /// checkmark the user sees next time they open the flyout — and because the answer changes only
+    /// when the user (or a Bluetooth connection) changes it.
+    /// </summary>
+    private static readonly TimeSpan DeviceInterval = TimeSpan.FromSeconds(2);
+
+    private readonly AudioDeviceService _devices = new();
+    private readonly DispatcherTimer _deviceTimer;
+
+    /// <summary>The endpoint the tooltip is currently naming, so a tick that changes nothing is free.</summary>
+    private string? _deviceId;
+
     private bool _dragging;
     private (int X, int Y) _grabCursor;
     private ScreenRect _grabBounds;
@@ -195,6 +208,8 @@ internal sealed class WidgetWindow
         _card.PreviousRequested += OnPreviousRequested;
         _card.SourceSwitchRequested += OnSourceSwitchRequested;
         _card.PinRequested += OnPinRequested;
+        _card.DevicePickerRequested += OnDevicePickerRequested;
+        _card.DeviceSelected += OnDeviceSelected;
         // A scale change rebuilds the window's measured size (SizeToContent follows the card's layout
         // transform), so it settles and saves exactly like the end of a drag does.
         _card.ScaleChanged += OnScaleChanged;
@@ -207,13 +222,21 @@ internal sealed class WidgetWindow
         _lyricTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = LyricInterval };
         _lyricTimer.Tick += OnLyricTick;
 
+        _deviceTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = DeviceInterval };
+        _deviceTimer.Tick += OnDeviceTick;
+
         // A silent start is a card nobody can see, so it does not poll at all - same reasoning as
         // HideCard. ShowCard starts it again, and refreshes immediately so the first frame is live.
         if (!startHidden)
         {
             _pollTimer.Start();
             _lyricTimer.Start();
+            _deviceTimer.Start();
         }
+
+        // The tooltip names the current output from the first hover, without waiting two seconds for
+        // the first tick.
+        RefreshDeviceLabel();
 
         // Fire-and-forget on purpose: it swallows its own failures (a machine with SMTC unavailable
         // still gets a draggable widget) and every tick before it completes is a harmless no-op.
@@ -410,6 +433,44 @@ internal sealed class WidgetWindow
         RepaintNow();
     }
 
+    // ---- output devices -----------------------------------------------------------------------
+
+    private void OnDeviceTick(object? sender, EventArgs e) => RefreshDeviceLabel();
+
+    /// <summary>Re-reads the default output and updates the card's tooltip when it changed.</summary>
+    private void RefreshDeviceLabel()
+    {
+        var device = _devices.Current();
+        if (device?.Id == _deviceId) return;
+
+        _deviceId = device?.Id;
+        _card.SetCurrentDevice(device);
+    }
+
+    /// <summary>Opens the flyout with a fresh snapshot of the machine's playback endpoints.</summary>
+    private void OnDevicePickerRequested(object? sender, EventArgs e)
+    {
+        _card.OpenDevicePicker(_devices.Devices());
+        RefreshDeviceLabel();
+    }
+
+    /// <summary>
+    /// Makes the picked endpoint the system default. The card keeps its flyout open until this says
+    /// how it went, so a failure is reported where the user is looking instead of vanishing silently.
+    /// </summary>
+    private void OnDeviceSelected(object? sender, string deviceId)
+    {
+        if (_devices.SetDefault(deviceId))
+        {
+            _card.CloseDevicePicker();
+            _deviceId = null; // force the tooltip to be rewritten even if the id somehow matches
+            RefreshDeviceLabel();
+            return;
+        }
+
+        _card.ShowDeviceMessage("切换失败：Windows 没有接受这个设备（它可能刚刚断开）");
+    }
+
     private void OnSourceSwitchRequested(object? sender, EventArgs e)
     {
         _media.CycleSession();
@@ -553,6 +614,7 @@ internal sealed class WidgetWindow
         // whatever was playing when it was dismissed.
         _pollTimer.Start();
         _lyricTimer.Start();
+        _deviceTimer.Start();
         _ = RefreshAndApplyAsync();
     }
 
@@ -571,6 +633,7 @@ internal sealed class WidgetWindow
         // showing it again is instant.
         _pollTimer.Stop();
         _lyricTimer.Stop();
+        _deviceTimer.Stop();
     }
 
     /// <summary>
@@ -581,6 +644,7 @@ internal sealed class WidgetWindow
     {
         _pollTimer.Stop();
         _lyricTimer.Stop();
+        _deviceTimer.Stop();
         CancelLookup();
         _lyrics.Dispose();
         _media.Dispose();

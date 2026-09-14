@@ -1,8 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Shapes;
 using DesktopMediaController.Core;
 using DesktopMediaController.Services;
 using DesktopMediaController.Services.Lyrics;
@@ -83,6 +85,11 @@ public sealed partial class WidgetCard : UserControl
     private Brush UnpinnedBrush = FrozenBrush(0x8C, 0xFF, 0xFF, 0xFF);
 
     /// <summary>The progress groove behind the fill. Instance, not static: it flips with the background.</summary>
+    /// <summary>Row text in the device flyout: the current output at full strength, the rest dimmed.</summary>
+    private Brush DeviceNameBrush = FrozenBrush(0xF2, 0xFF, 0xFF, 0xFF);
+
+    private Brush DeviceMutedBrush = FrozenBrush(0xB0, 0xFF, 0xFF, 0xFF);
+
     private Brush ProgressTrackBrush = FrozenBrush(0x33, 0xFF, 0xFF, 0xFF);
 
     private WidgetSize _size = WidgetSize.Base;
@@ -247,6 +254,14 @@ public sealed partial class WidgetCard : UserControl
         PreviousIcon.Fill = ToFrozenBrush(tiers.Icon);
         NextIcon.Fill = ToFrozenBrush(tiers.Icon);
         ToggleIcon.Fill = ToFrozenBrush(tiers.IconStrong);
+
+        // The flyout is a themed surface too: opaque so it reads over whatever is underneath, derived
+        // from the background so it belongs to the card, and its rows are text at the neutral tiers.
+        DeviceNameBrush = ToFrozenBrush(tiers.Title);
+        DeviceMutedBrush = ToFrozenBrush(tiers.Secondary);
+        DevicePanel.Background = ToFrozenBrush(CardPalette.SurfaceFromBackground(theme.Background));
+        DevicePanel.BorderBrush = ToFrozenBrush(ArgbColor.FromArgb(0x66, theme.Border.R, theme.Border.G, theme.Border.B));
+        SetDeviceGlyphBrush(DevicePopup.IsOpen ? PinnedBrush : UnpinnedBrush);
 
         RefreshLyricColors();
         SetPinnedVisual(_pinned);
@@ -664,6 +679,20 @@ public sealed partial class WidgetCard : UserControl
 
     /// <summary>Raised when the user clicks the player name to move to the next player.</summary>
     public event EventHandler? SourceSwitchRequested;
+
+    /// <summary>
+    /// Raised when the user opens the output-device flyout. The card has no idea what endpoints the
+    /// machine has — that is COM, and the window owns it — so it asks for a snapshot and paints
+    /// whatever comes back, including nothing at all.
+    /// </summary>
+    internal event EventHandler? DevicePickerRequested;
+
+    /// <summary>Raised with the endpoint id the user picked, for the host to make default.</summary>
+    /// <remarks>
+    /// The flyout stays open until the host answers: a switch that fails has to say so in the place
+    /// the user is already looking, rather than close and leave them wondering why nothing happened.
+    /// </remarks>
+    internal event EventHandler<string>? DeviceSelected;
 
     /// <summary>
     /// The card's current size, <i>as persisted</i>: the design geometry multiplied by the active
@@ -1248,4 +1277,218 @@ public sealed partial class WidgetCard : UserControl
 
     private void OnSourceClick(object sender, RoutedEventArgs e) =>
         SourceSwitchRequested?.Invoke(this, EventArgs.Empty);
+
+    // ---- output devices ------------------------------------------------------------------------
+
+    /// <summary>
+    /// Names the endpoint that is the default right now, on the device button's tooltip.
+    /// </summary>
+    /// <remarks>
+    /// A tooltip rather than a label on the card: the card has exactly as much room as the song needs,
+    /// and the current device is information the user looks up, not information they live with.
+    /// </remarks>
+    internal void SetCurrentDevice(AudioDeviceInfo? device) =>
+        DeviceButton.ToolTip = device is null
+            ? "输出设备（没有检测到可用的设备）"
+            : $"输出设备：{device.Name}（点击切换）";
+
+    private void OnDeviceClick(object sender, RoutedEventArgs e)
+    {
+        // A second click dismisses. The button lives outside the popup, so without this the popup's
+        // own "click away to close" would see the click, close, and then the button would immediately
+        // reopen it — the button would only ever appear to work on alternate presses.
+        if (DevicePopup.IsOpen)
+        {
+            DevicePopup.IsOpen = false;
+            return;
+        }
+
+        DevicePickerRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Fills the flyout from a device snapshot and opens it.
+    /// </summary>
+    /// <remarks>
+    /// Rebuilt on every open, never cached: a Bluetooth speaker that was switched off since the last
+    /// look must not be offered, and the checkmark has to be the truth at this instant. The
+    /// enumeration is a handful of COM calls — cheaper than the invalidation logic a cache would need.
+    /// </remarks>
+    internal void OpenDevicePicker(IReadOnlyList<AudioDeviceInfo> devices)
+    {
+        BuildDeviceRows(devices);
+        DevicePopup.IsOpen = true;
+    }
+
+    /// <summary>Closes the flyout after a switch the host reports as successful.</summary>
+    internal void CloseDevicePicker() => DevicePopup.IsOpen = false;
+
+    /// <summary>
+    /// Replaces the flyout's rows with one message and keeps it open — how a failed switch is
+    /// reported, in the place the user is already looking.
+    /// </summary>
+    internal void ShowDeviceMessage(string message)
+    {
+        DeviceRows.Children.Clear();
+        DeviceRows.Children.Add(new TextBlock
+        {
+            Text = message,
+            Foreground = DeviceMutedBrush,
+            FontSize = 12,
+            MaxWidth = 208,
+            Margin = new Thickness(10, 8, 10, 8),
+            TextWrapping = TextWrapping.Wrap,
+        });
+        DevicePopup.IsOpen = true;
+    }
+
+    private void OnDevicePopupOpened(object sender, EventArgs e) => SetDeviceGlyphBrush(PinnedBrush);
+
+    private void OnDevicePopupClosed(object sender, EventArgs e) => SetDeviceGlyphBrush(UnpinnedBrush);
+
+    /// <summary>Lights the device icon while its flyout is open, exactly as the pin lights when pinned.</summary>
+    private void SetDeviceGlyphBrush(Brush brush)
+    {
+        DeviceIconBody.Fill = brush;
+        DeviceIconWave.Stroke = brush;
+        DeviceIconWave2.Stroke = brush;
+    }
+
+    private void BuildDeviceRows(IReadOnlyList<AudioDeviceInfo> devices)
+    {
+        DeviceRows.Children.Clear();
+
+        if (devices.Count == 0)
+        {
+            DeviceRows.Children.Add(new TextBlock
+            {
+                Text = "没有检测到输出设备",
+                Foreground = DeviceMutedBrush,
+                FontSize = 12,
+                Margin = new Thickness(10, 8, 10, 8),
+            });
+            return;
+        }
+
+        // Hover is a wash of the same colour the text is, not of white: on a light card a white wash
+        // is invisible, and on a dark one it is the only thing visible.
+        var hover = CardPalette.IsLightBackground(_theme.Background) ? "#14000000" : "#1AFFFFFF";
+        var template = DeviceRowTemplate(hover);
+
+        foreach (var device in devices)
+        {
+            var glyph = DeviceGlyph(device.Kind, device.IsDefault ? DeviceNameBrush : DeviceMutedBrush);
+            DockPanel.SetDock(glyph, Dock.Left);
+
+            var check = new TextBlock
+            {
+                Text = device.IsDefault ? "\u2713" : string.Empty,
+                Foreground = PinnedBrush,
+                FontSize = 12,
+                Width = 14,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            DockPanel.SetDock(check, Dock.Right);
+
+            var name = new TextBlock
+            {
+                Text = device.Name,
+                Foreground = device.IsDefault ? DeviceNameBrush : DeviceMutedBrush,
+                FontSize = 12,
+                Margin = new Thickness(8, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+
+            var row = new Button
+            {
+                Content = new DockPanel { LastChildFill = true, Children = { glyph, check, name } },
+                Height = 30,
+                Margin = new Thickness(0, 1, 0, 1),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Focusable = false,
+                FocusVisualStyle = null,
+                Cursor = Cursors.Hand,
+                Template = template,
+            };
+
+            var id = device.Id;
+            row.Click += (_, _) => DeviceSelected?.Invoke(this, id);
+            DeviceRows.Children.Add(row);
+        }
+    }
+
+    /// <summary>
+    /// A device row's chrome: rounded, flat, and focus-free — see the theme menu's templates for why
+    /// the default Aero2 chrome cannot be used anywhere near this card.
+    /// </summary>
+    private static ControlTemplate DeviceRowTemplate(string hover) => ParseTemplate(
+        $"""
+         <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                          xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                          TargetType="Button">
+             <Border x:Name="Chrome" Background="Transparent" CornerRadius="6" Padding="8,0">
+                 <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
+             </Border>
+             <ControlTemplate.Triggers>
+                 <Trigger Property="IsMouseOver" Value="True">
+                     <Setter TargetName="Chrome" Property="Background" Value="{hover}" />
+                 </Trigger>
+             </ControlTemplate.Triggers>
+         </ControlTemplate>
+         """);
+
+    /// <summary>
+    /// The glyph for a kind of endpoint, drawn at 16×16: a speaker with waves, headphones, the
+    /// Bluetooth rune, or a monitor.
+    /// </summary>
+    private static Canvas DeviceGlyph(AudioDeviceKind kind, Brush brush)
+    {
+        var canvas = new Canvas { Width = 16, Height = 16 };
+
+        void Add(string data, bool filled)
+        {
+            var path = new Path
+            {
+                Data = Geometry.Parse(data),
+                Fill = filled ? brush : Brushes.Transparent,
+                Stroke = filled ? null : brush,
+                StrokeThickness = 1.3,
+            };
+
+            if (!filled)
+            {
+                path.StrokeStartLineCap = PenLineCap.Round;
+                path.StrokeEndLineCap = PenLineCap.Round;
+                path.StrokeLineJoin = PenLineJoin.Round;
+            }
+
+            canvas.Children.Add(path);
+        }
+
+        switch (kind)
+        {
+            case AudioDeviceKind.Monitor:
+                Add("M1.5,3 H14.5 V10 H1.5 Z", filled: false);
+                Add("M8,10 V13.2 M5.4,13.2 H10.6", filled: false);
+                break;
+            case AudioDeviceKind.Headphone:
+                Add("M3,9.4 A5,5 0 0 1 13,9.4", filled: false);
+                Add("M2.6,9 H5 V13.4 H2.6 Z", filled: true);
+                Add("M11,9 H13.4 V13.4 H11 Z", filled: true);
+                break;
+            case AudioDeviceKind.Bluetooth:
+                Add("M8,2.5 V13.5 M5.4,5.4 L11,11 L8,13.5 M5.4,11 L11,5.4 L8,2.5", filled: false);
+                break;
+            default:
+                Add("M1,6 H3.2 L6.6,3 V13 L3.2,10 H1 Z", filled: true);
+                Add("M8.7,5.6 A4.2,4.2 0 0 1 8.7,10.4", filled: false);
+                break;
+        }
+
+        return canvas;
+    }
 }

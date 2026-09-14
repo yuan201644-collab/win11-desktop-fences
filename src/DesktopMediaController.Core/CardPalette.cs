@@ -66,6 +66,17 @@ public static class CardPalette
     public static ArgbColor PanelFromBackground(ArgbColor background) => Darken(background, 0.72);
 
     /// <summary>
+    /// The device flyout's surface: opaque, because it floats over whatever the user is working in and
+    /// a see-through menu is unreadable. On a light card it is the background itself; on a dark one it
+    /// is the background pushed one step down, which is how the flyout reads as belonging to the card
+    /// without being the same flat rectangle as it.
+    /// </summary>
+    public static ArgbColor SurfaceFromBackground(ArgbColor background) =>
+        IsLightBackground(background)
+            ? background with { A = 0xFF }
+            : Darken(background, 0.82) with { A = 0xFF };
+
+    /// <summary>
     /// Perceived brightness of the background on the 0–255 YIQ luma scale — the cheap standard for
     /// "will white text survive on this". Alpha is ignored on purpose: the slider scales the whole
     /// card's translucency and the desktop behind it is unknowable, so the picked colour is what the

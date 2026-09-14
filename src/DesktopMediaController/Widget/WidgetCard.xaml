@@ -50,6 +50,12 @@
          window would open at the unscaled size and clip the content (seen 2026-09-14: a 125% card
          in a 620x216 window). The card states its scaled size explicitly; this wrapper measures at
          the design geometry and renders scaled. -->
+    <!-- Root holds two things: the scaled card, and the device flyout. The flyout cannot live inside
+         ScaleHost — that wrapper carries the scale preset's LayoutTransform, and a menu shrunk to 75%
+         would be unreadable — and it cannot live inside the card either, because the card is clipped
+         to a rounded rectangle and would cut it off. It is therefore a Popup: its own window, one
+         fixed size at every preset, anchored to the device button. -->
+    <Grid x:Name="Root">
     <Grid x:Name="ScaleHost">
         <Border x:Name="Shell" CornerRadius="20"
                 Background="#E81A1A20"
@@ -99,6 +105,27 @@
                             FontSize="10" Foreground="#B3FFFFFF"
                             Content="&#x2715;" ToolTip="隐藏到托盘（音乐继续播放，右键托盘图标退出）"
                             Click="OnCloseClick" />
+                    <!-- Output-device picker. Drawn rather than typed: a glyph font would put this at
+                         the mercy of whichever Segoe build the machine has, and the card has to look
+                         the same everywhere. Body + two sound waves, filled/stroked with the neutral
+                         glyph tier so it flips with the background like every other icon. -->
+                    <Button x:Name="DeviceButton" DockPanel.Dock="Right"
+                            Style="{StaticResource IconButton}"
+                            Width="20" Height="20" Margin="6,0,0,0"
+                            ToolTip="输出设备" Click="OnDeviceClick">
+                        <Viewbox Width="15" Height="15" Stretch="Uniform">
+                            <Canvas Width="16" Height="16">
+                                <Path x:Name="DeviceIconBody" Fill="#8CFFFFFF"
+                                      Data="M1,6 H3.2 L6.6,3 V13 L3.2,10 H1 Z" />
+                                <Path x:Name="DeviceIconWave" Fill="Transparent" Stroke="#8CFFFFFF"
+                                      StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Data="M8.7,5.6 A4.2,4.2 0 0 1 8.7,10.4" />
+                                <Path x:Name="DeviceIconWave2" Fill="Transparent" Stroke="#8CFFFFFF"
+                                      StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Data="M11,3.6 A6.6,6.6 0 0 1 11,12.4" />
+                            </Canvas>
+                        </Viewbox>
+                    </Button>
                     <!-- Glyphs from Segoe MDL2 Assets: E718 is the pin, E77A the un-pin. The card
                          swaps them in code — see WidgetCard.SetPinnedVisual. -->
                     <Button x:Name="PinButton" DockPanel.Dock="Right"
@@ -218,6 +245,31 @@
                 </DockPanel>
             </Grid>
         </Grid>
-    </Border>
+        </Border>
+    </Grid>
+
+    <!-- The device flyout itself. StaysOpen=False is what gives the "click anywhere to dismiss"
+         behaviour a menu has to have; AllowsTransparency is what lets it be a rounded shape rather
+         than a rectangle with painted corners. Rows are built in code (see WidgetCard.OpenDevicePicker)
+         because they are themed, and a themed row is not a XAML resource. -->
+    <Popup x:Name="DevicePopup"
+           PlacementTarget="{Binding ElementName=DeviceButton}"
+           Placement="Top"
+           StaysOpen="False"
+           AllowsTransparency="True"
+           Opened="OnDevicePopupOpened"
+           Closed="OnDevicePopupClosed">
+        <Border x:Name="DevicePanel" CornerRadius="10" Padding="6" MinWidth="220"
+                Background="#FF1A1A20" BorderBrush="#6687C5FF" BorderThickness="1">
+            <!-- Capped, because a machine with fifteen endpoints must not grow a menu taller than the
+                 screen. Six to eight devices — the realistic case — never reach the cap. -->
+            <ScrollViewer MaxHeight="264"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto"
+                          Focusable="False">
+                <StackPanel x:Name="DeviceRows" />
+            </ScrollViewer>
+        </Border>
+    </Popup>
     </Grid>
 </UserControl>
