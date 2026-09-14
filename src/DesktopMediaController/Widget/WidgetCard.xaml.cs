@@ -49,18 +49,35 @@ public sealed partial class WidgetCard : UserControl
     /// </remarks>
     private const double NonTextChromeDip = 36;
 
-    /// <summary>Length of each half of the scroll: out, then back in.</summary>
-    private static readonly TimeSpan LyricScrollHalf = TimeSpan.FromMilliseconds(110);
-
-    /// <summary>How far the block fades while it is off its mark mid-scroll.</summary>
-    private const double LyricScrollDim = 0.2;
+    /// <summary>
+    /// How long one line change takes to scroll through, for all four rows at once.
+    /// </summary>
+    /// <remarks>
+    /// One duration and one easing curve for the whole motion. The version this replaced animated out
+    /// and back as two curves in sequence, and the join — the first decelerating to zero, the second
+    /// starting from zero inside the first one's completion callback — is what read as stiffness. A
+    /// single curve has no join.
+    /// </remarks>
+    private static readonly TimeSpan LyricScrollDuration = TimeSpan.FromMilliseconds(260);
 
     // Frozen statics, because the paint loop compares brushes by reference to decide whether anything
     // changed. Handing WPF a fresh-but-equal brush would invalidate the render on every syllable for
     // no visible reason.
     private static readonly Brush SungBrush = FrozenBrush(0x8F, 0xC5, 0xFF);
     private static readonly Brush CurrentBrush = FrozenBrush(0xFF, 0xFF, 0xFF);
-    private static readonly Brush RemainingBrush = FrozenBrush(0x32, 0xFF, 0xFF, 0xFF);
+
+    /// <summary>
+    /// Everything that is not being sung right now: the lines above and below, and the part of the
+    /// active line the playhead has not reached yet.
+    /// </summary>
+    /// <remarks>
+    /// One brush for both uses, deliberately. While they differed — the unsung part of the active line
+    /// at 20% and the upcoming lines at 35% — a line arriving in the middle slot <i>dimmed</i> as it
+    /// arrived, and that step had to be hidden behind a whole-block crossfade. Matching the two means a
+    /// line's colour is continuous through the entire motion: the only thing that happens when a line
+    /// becomes current is that it grows, which is exactly what the motion is about.
+    /// </remarks>
+    private static readonly Brush IdleBrush = FrozenBrush(0x59, 0xFF, 0xFF, 0xFF);
 
     private WidgetSize _size;
 
@@ -75,13 +92,41 @@ public sealed partial class WidgetCard : UserControl
     private double _blockScale = 1d;
     private double _textWidthDip;
 
+    /// <summary>The block's slot geometry at the current card size, in DIP.</summary>
+    private double _contextRowDip = LyricTypeScale.ContextRow;
+    private double _currentRowDip = LyricTypeScale.CurrentRow;
+    private double _contextFontDip = LyricTypeScale.ContextFont;
+
     // ---- lyric painting state -----------------------------------------------------------------
 
-    /// <summary>One inline per character of the active line. Their text is written once, at build time.</summary>
-    private readonly List<Run> _lineRuns = new();
+    /// <summary>
+    /// The four rows, in slot order: 0 is the line above the active one, 1 is the active one, 2 is the
+    /// line below, and 3 is parked below the clip holding the line that will arrive next. See
+    /// <see cref="LyricScroll"/> for why there are four.
+    /// </summary>
+    private readonly TextBlock[] _rows;
 
-    /// <summary>The text <see cref="_lineRuns"/> was built from, so a rebuild is only done when it changes.</summary>
-    private string _runText = string.Empty;
+    /// <summary>
+    /// One inline per character, per row — though only the active line's row is populated that way, the
+    /// others being a single inline, since nothing ever colours them character by character.
+    /// </summary>
+    private readonly List<Run>[] _rowRuns;
+
+    /// <summary>The text each row currently shows, so a change of role can be told from a repaint.</summary>
+    private readonly string[] _rowTexts = new string[LyricScroll.RowCount];
+
+    /// <summary>Which slot holds the line being sung: 1 at rest, 2 for the length of a scroll.</summary>
+    private int _currentRow = 1;
+
+    /// <summary>
+    /// How many characters the line in slot 1 has.
+    /// </summary>
+    /// <remarks>
+    /// Its length is what decides its type size — a long line has to be set smaller so that it is shown
+    /// whole — so the size is derived from this rather than stored, which keeps it right through a
+    /// resize instead of until the next line change.
+    /// </remarks>
+    private int _row1Elements;
 
     /// <summary>Boundary of the last painted highlight, as a half-open element range. −1 means "nothing yet".</summary>
     private int _paintedSung = -1;
@@ -96,14 +141,31 @@ public sealed partial class WidgetCard : UserControl
     /// </remarks>
     private int _shownIndex = -1;
 
-    /// <summary>The window most recently handed to the card, so the scroll's swap uses the newest one.</summary>
-    private LyricsWindow? _pending;
+    /// <summary>
+    /// The highlight most recently handed to the card.
+    /// </summary>
+    /// <remarks>
+    /// Kept because the row that owns the inlines is rebuilt at the end of every scroll, and a rebuild
+    /// leaves their colours at the idle one — so the live highlight has to be re-applied on top.
+    /// </remarks>
+    private LyricLinePaint _paint = LyricLinePaint.Empty;
+
+    /// <summary>The motion in flight, so that a resize or a seek can land it before doing anything else.</summary>
+    private LyricScroll.Plan _scrollPlan;
 
     private bool _scrolling;
 
     public WidgetCard(WidgetSize size)
     {
         InitializeComponent();
+
+        // Slot order, not visual order: see the field's comment. The rows are addressed as an array
+        // because every animation applies to all four, and four copies of each call would be four
+        // places to forget the fourth row in.
+        _rows = new[] { LyricRow0, LyricRow1, LyricRow2, LyricRow3 };
+        _rowRuns = new List<Run>[LyricScroll.RowCount];
+        for (var row = 0; row < _rowRuns.Length; row++) _rowRuns[row] = new List<Run>();
+
         Apply(MediaSnapshot.Idle);
         ApplyLyrics(null, LyricsState.Idle);
         SetCardSize(size);
@@ -166,40 +228,62 @@ public sealed partial class WidgetCard : UserControl
     /// </remarks>
     private void ApplyLyricMetrics(double cardHeightDip, double textWidthDip)
     {
+        // A resize changes the distances a scroll travels, so a motion in flight is landed before
+        // anything is recomputed: a drag emits resizes many times a second, and interpolating towards
+        // geometry that no longer exists is the one way this could tear.
+        FinishScroll();
+
         _textWidthDip = Math.Max(0d, textWidthDip);
 
         var fit = LyricTypeScale.Measure(cardHeightDip, _textWidthDip, 0);
         _blockScale = fit.BlockScale;
-
-        LyricCurrent.Height = fit.CurrentRowHeight;
-
-        LyricPrevious.FontSize = fit.ContextFontSize;
-        LyricPrevious.Height = fit.ContextRowHeight;
-
-        LyricNext.FontSize = fit.ContextFontSize;
-        LyricNext.Height = fit.ContextRowHeight;
+        _contextRowDip = fit.ContextRowHeight;
+        _currentRowDip = fit.CurrentRowHeight;
+        _contextFontDip = fit.ContextFontSize;
 
         LyricStatus.FontSize = fit.ContextFontSize;
 
-        ApplyCurrentLineFont(0);
+        foreach (var row in _rows)
+        {
+            // Set explicitly rather than letting each row size to its own text. Rows live on a Canvas,
+            // which measures its children with infinite width, so a row left to itself would never trim
+            // — it would run off the card instead of ending in an ellipsis.
+            row.Width = _textWidthDip;
+        }
+
+        var activeFont = FontFor(_row1Elements);
+        var plan = PlanWith(activeFont, activeFont);
+        LyricLines.Height = plan.BlockHeight;
+        ApplyFrame(plan.Rest);
     }
 
+    /// <summary>The block's slot geometry, with the two type sizes a line change moves between.</summary>
+    private LyricScroll.Plan PlanWith(double outgoingFont, double incomingFont) =>
+        LyricScroll.For(_contextRowDip, _currentRowDip, _contextFontDip, outgoingFont, incomingFont);
+
     /// <summary>
-    /// Sets the emphasised line's type size for a line of <paramref name="elementCount"/> characters.
+    /// Type size the active line settles at, given how many characters it has.
     /// </summary>
     /// <remarks>
-    /// Called once per line rather than once per syllable: the count does not change while a line is
-    /// being sung, and re-deriving it on every tick would be a needless assignment inside the one loop
-    /// that has to stay cheap. The line's row height is deliberately <i>not</i> touched here — it stays
-    /// on the block scale so the scroll always travels the same distance.
+    /// Derived once per line rather than once per syllable: the count cannot change while a line is
+    /// being sung, and re-deriving it on every tick would be work inside the one loop that has to stay
+    /// cheap. The line's <i>row</i> is deliberately unaffected — it stays on the block scale, so a
+    /// scroll always travels the same distance whatever the words are.
     /// </remarks>
-    private void ApplyCurrentLineFont(int elementCount)
-    {
-        var scale = _textWidthDip > 0d
-            ? LyricTypeScale.CurrentScaleFor(_blockScale, _textWidthDip, elementCount)
-            : _blockScale;
+    private double FontFor(int elementCount) =>
+        _textWidthDip > 0d
+            ? LyricTypeScale.CurrentFont * LyricTypeScale.CurrentScaleFor(_blockScale, _textWidthDip, elementCount)
+            : LyricTypeScale.CurrentFont * _blockScale;
 
-        LyricCurrent.FontSize = LyricTypeScale.CurrentFont * scale;
+    /// <summary>Writes one frame of the motion onto the four rows: position, type size, opacity.</summary>
+    private void ApplyFrame(LyricScroll.Frame frame)
+    {
+        for (var row = 0; row < _rows.Length; row++)
+        {
+            Canvas.SetTop(_rows[row], frame.Top(row));
+            _rows[row].FontSize = frame.FontSize(row);
+            _rows[row].Opacity = frame.Opacity(row);
+        }
     }
 
     /// <summary>
@@ -263,9 +347,9 @@ public sealed partial class WidgetCard : UserControl
     {
         if (window is not { } lyrics)
         {
-            CancelScroll();
+            FinishScroll();
             _shownIndex = -1;
-            _pending = null;
+            _paint = LyricLinePaint.Empty;
             LyricLines.Visibility = Visibility.Collapsed;
 
             LyricStatus.Text = state switch
@@ -287,9 +371,10 @@ public sealed partial class WidgetCard : UserControl
         if (lyrics.CurrentIndex == _shownIndex)
         {
             // The same line: only the highlight moved. Recolouring inlines whose text never changes
-            // invalidates the render and nothing else, so this is safe to do while a scroll is running
-            // — and the newest window is kept so the scroll's swap lands on a current highlight.
-            _pending = lyrics;
+            // invalidates the render and nothing else — and mid-scroll they are the arriving row's
+            // inlines, which is what lets the new line light up as it comes in rather than after it
+            // lands.
+            _paint = lyrics.Current;
             PaintHighlight(lyrics.Current);
             return;
         }
@@ -302,155 +387,215 @@ public sealed partial class WidgetCard : UserControl
 
         // A seek, a track change, the first paint, or a second advance inside one scroll. Replacing the
         // text is the honest answer to all four.
-        CancelScroll();
+        FinishScroll();
         Paint(lyrics);
     }
 
     /// <summary>Puts a window on screen at once, with no animation.</summary>
     private void Paint(LyricsWindow lyrics)
     {
-        LyricPrevious.Text = lyrics.Previous;
-        LyricNext.Text = lyrics.Next;
-
-        _pending = lyrics;
         _shownIndex = lyrics.CurrentIndex;
+        _paint = lyrics.Current;
+        _currentRow = 1;
+        _row1Elements = lyrics.Current.ElementCount;
 
-        // Before the inlines are built, so the new line is shaped once at its final size rather than
-        // twice. The line's own length is what decides that size: see ApplyCurrentLineFont.
-        ApplyCurrentLineFont(lyrics.Current.ElementCount);
-        BuildRuns(lyrics.Current.Text);
+        SetRow(0, lyrics.Previous, active: false);
+        SetRow(1, lyrics.Current.Text, active: true);
+        SetRow(2, lyrics.Next, active: false);
+        SetRow(3, string.Empty, active: false);
+
+        var activeFont = FontFor(_row1Elements);
+        ApplyFrame(PlanWith(activeFont, activeFont).Rest);
         PaintHighlight(lyrics.Current);
     }
 
     /// <summary>
-    /// Gives the active line one inline per character, and never touches their text again.
+    /// Gives a row a new line: one inline per character when it is the active line, one for the whole
+    /// line when it is not.
     /// </summary>
     /// <remarks>
     /// <para>
     /// This is the whole fix for the line that used to twitch sideways on every beat. The old code
     /// rebuilt three runs' text at each syllable boundary, and assigning to a run's text invalidates
     /// the <i>measure</i> — so WPF re-shaped the whole line, and the glyphs after the boundary moved,
-    /// once per character. Changing only a run's colour invalidates the <i>render</i>: the run's text
-    /// is unchanged, nothing is re-measured, and the positions are therefore frozen by construction
-    /// rather than by luck.
+    /// once per character. Changing only a run's colour invalidates the <i>render</i>: the run's text is
+    /// unchanged, nothing is re-measured, and the positions are therefore frozen by construction rather
+    /// than by luck.
     /// </para>
     /// <para>
     /// One inline per <i>text element</i>, not per UTF-16 code unit: see <see cref="TextElements"/> for
     /// what splitting a surrogate pair would do to an emoji.
     /// </para>
+    /// <para>
+    /// Context rows get a single inline because nothing ever colours them character by character —
+    /// giving them that structure would be one more thing to keep in step for no visible gain.
+    /// </para>
     /// </remarks>
-    private void BuildRuns(string text)
+    private void SetRow(int row, string text, bool active)
     {
-        var inlines = LyricCurrent.Inlines;
-        inlines.Clear();
-        _lineRuns.Clear();
+        var block = _rows[row];
+        var runs = _rowRuns[row];
 
-        foreach (var element in TextElements.Split(text))
+        block.Inlines.Clear();
+        runs.Clear();
+        _rowTexts[row] = text;
+
+        if (active)
         {
-            var run = new Run(element) { Foreground = RemainingBrush };
-            _lineRuns.Add(run);
-            inlines.Add(run);
-        }
+            foreach (var element in TextElements.Split(text))
+            {
+                var run = new Run(element) { Foreground = IdleBrush };
+                runs.Add(run);
+                block.Inlines.Add(run);
+            }
 
-        _runText = text;
-        _paintedSung = -1;
-        _paintedEnd = -1;
+            // The runs the last highlight referred to are gone, so it cannot be compared against
+            // whatever the next caller paints — a rebuild and an unchanged range must not look alike.
+            _paintedSung = -1;
+            _paintedEnd = -1;
+        }
+        else if (text.Length > 0)
+        {
+            block.Inlines.Add(new Run(text) { Foreground = IdleBrush });
+        }
     }
 
     /// <summary>
-    /// Colours the inlines the active line already has: everything before <c>Sung</c> one way, the
-    /// syllable being sung another, the rest a third.
+    /// Colours the active line's inlines: everything before <c>Sung</c> one way, the syllable being sung
+    /// another, the rest a third.
     /// </summary>
     private void PaintHighlight(LyricLinePaint paint)
     {
-        // Only reachable if a caller hands over a window whose line is not the one the inlines were
+        // Only reachable if a caller hands over a window whose line is not the one the active row was
         // built from. Rebuilding is the safe answer; colouring the wrong glyphs is not.
-        if (!string.Equals(paint.Text, _runText, StringComparison.Ordinal)) BuildRuns(paint.Text);
+        if (!string.Equals(_rowTexts[_currentRow], paint.Text, StringComparison.Ordinal))
+            SetRow(_currentRow, paint.Text, active: true);
 
-        var sung = Math.Clamp(paint.SungElements, 0, _lineRuns.Count);
-        var end = Math.Clamp(paint.SungElements + paint.CurrentElements, sung, _lineRuns.Count);
+        var runs = _rowRuns[_currentRow];
+        var sung = Math.Clamp(paint.SungElements, 0, runs.Count);
+        var end = Math.Clamp(paint.SungElements + paint.CurrentElements, sung, runs.Count);
         if (sung == _paintedSung && end == _paintedEnd) return;
 
         _paintedSung = sung;
         _paintedEnd = end;
 
-        for (var i = 0; i < _lineRuns.Count; i++)
+        for (var i = 0; i < runs.Count; i++)
         {
-            var brush = i < sung ? SungBrush : i < end ? CurrentBrush : RemainingBrush;
-            if (!ReferenceEquals(_lineRuns[i].Foreground, brush)) _lineRuns[i].Foreground = brush;
+            var brush = i < sung ? SungBrush : i < end ? CurrentBrush : IdleBrush;
+            if (!ReferenceEquals(runs[i].Foreground, brush)) runs[i].Foreground = brush;
         }
     }
 
     /// <summary>
-    /// Scrolls the block up and away, swaps the text at the furthest point, and brings it back.
+    /// Scrolls every row up by one slot, so that the line below arrives in the middle.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Out and back rather than a continuous scroll of the whole document, because the rows are not the
-    /// same height — the emphasised line's row is nearly twice a context row's — so "move everything up
-    /// by one line" is not a single distance and cannot be a single translation of one container. The
-    /// two halves are 110 ms each, which is short enough that the swap is not readable as a swap.
+    /// One curve, one duration, four rows — and a row that is already holding the line after next
+    /// before anything starts, which is what makes the arrival an arrival rather than a replacement.
+    /// The motion itself is <see cref="LyricScroll"/>'s; that is also where the property that makes the
+    /// reset at the end invisible is written down.
     /// </para>
     /// <para>
-    /// Both halves only ever touch <c>RenderTransform</c> and <c>Opacity</c>, so not a single frame of
-    /// the animation re-measures anything.
+    /// Nothing here rebuilds the active line's inlines: it is the <i>arriving</i> row that takes them
+    /// over, so the highlight on the line being sung is never interrupted and the new line lights up
+    /// character by character while it is still moving.
     /// </para>
     /// </remarks>
     private void ScrollToNextLine(LyricsWindow lyrics)
     {
         _scrolling = true;
-        _pending = lyrics;
+        _shownIndex = lyrics.CurrentIndex;
+        _paint = lyrics.Current;
 
-        var lift = LyricCurrent.Height;
-        if (double.IsNaN(lift) || lift <= 0) lift = LyricTypeScale.CurrentRow;
+        var plan = PlanWith(FontFor(_row1Elements), FontFor(lyrics.Current.ElementCount));
+        _scrollPlan = plan;
 
-        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        // Stage the row below the clip. It sits exactly on the clip's bottom edge, where it counts as
+        // invisible, so filling it in here cannot be seen — and it has to be filled in before the motion
+        // starts, or the last third of the motion would show an empty row rising into place.
+        SetRow(3, lyrics.Next, active: false);
 
-        // Completed is what does the swap. Everything between clearing the first animation and starting
-        // the second happens inside this one callback, so no frame is ever drawn showing the new text
-        // at the old offset.
-        var fadeOut = new DoubleAnimation(1, LyricScrollDim, LyricScrollHalf)
+        // The arriving line takes over the inlines now rather than at the end. A context row is a single
+        // inline in the idle colour and the active row's unsung characters are painted in that same
+        // colour, so the swap is invisible where it happens.
+        SetRow(2, lyrics.Current.Text, active: true);
+        _currentRow = 2;
+
+        var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
+        var start = plan.Start;
+        var end = plan.End;
+
+        // Every row, every property, one duration and one easing: the frames cannot disagree with each
+        // other, which is the whole difference between this and two animations handed over in sequence.
+        void Animate(int row, double from, double to, DependencyProperty property, bool land)
         {
-            EasingFunction = ease,
-            FillBehavior = FillBehavior.HoldEnd,
-        };
+            var animation = new DoubleAnimation(from, to, LyricScrollDuration)
+            {
+                EasingFunction = ease,
+                FillBehavior = FillBehavior.HoldEnd,
+            };
 
-        fadeOut.Completed += (_, _) =>
+            if (land) animation.Completed += (_, _) => FinishScroll();
+            _rows[row].BeginAnimation(property, animation);
+        }
+
+        for (var row = 0; row < _rows.Length; row++)
         {
-            LyricShift.BeginAnimation(TranslateTransform.YProperty, null);
-            LyricLines.BeginAnimation(OpacityProperty, null);
-
-            Paint(_pending ?? lyrics);
-
-            // The base values are the resting state, and both animations below stop rather than hold, so
-            // the end of the scroll leaves the block exactly where the properties already say it is.
-            LyricShift.BeginAnimation(
-                TranslateTransform.YProperty,
-                new DoubleAnimation(lift, 0, LyricScrollHalf) { EasingFunction = ease, FillBehavior = FillBehavior.Stop });
-            LyricLines.BeginAnimation(
-                OpacityProperty,
-                new DoubleAnimation(LyricScrollDim, 1, LyricScrollHalf) { EasingFunction = ease, FillBehavior = FillBehavior.Stop });
-
-            _scrolling = false;
-        };
-
-        LyricShift.BeginAnimation(
-            TranslateTransform.YProperty,
-            new DoubleAnimation(0, -lift, LyricScrollHalf) { EasingFunction = ease, FillBehavior = FillBehavior.HoldEnd });
-        LyricLines.BeginAnimation(OpacityProperty, fadeOut);
+            Animate(row, start.Top(row), end.Top(row), Canvas.TopProperty, land: false);
+            Animate(row, start.FontSize(row), end.FontSize(row), TextBlock.FontSizeProperty, land: false);
+            Animate(row, start.Opacity(row), end.Opacity(row), OpacityProperty, land: row == 1);
+        }
     }
 
-    /// <summary>Stops a scroll in flight and puts the block back on its mark.</summary>
-    private void CancelScroll()
+    /// <summary>
+    /// Lands a scroll in flight: clears the animations, shifts the text up one slot, and puts the rows
+    /// back on their resting offsets.
+    /// </summary>
+    /// <remarks>
+    /// Called when the motion runs out, and — through <see cref="CancelScroll"/> — whenever something
+    /// interrupts one. Both want the same thing, because the frame the motion ends on <i>is</i> the
+    /// resting frame shifted up one slot: the reset that has to happen here redraws exactly the pixels
+    /// that are already on screen, so landing early is as invisible as landing on time. A no-op when
+    /// nothing is in flight.
+    /// </remarks>
+    private void FinishScroll()
     {
-        if (!_scrolling && LyricShift.Y == 0d && LyricLines.Opacity == 1d) return;
+        if (!_scrolling) return;
 
         _scrolling = false;
-        LyricShift.BeginAnimation(TranslateTransform.YProperty, null);
-        LyricLines.BeginAnimation(OpacityProperty, null);
-        LyricShift.Y = 0d;
-        LyricLines.Opacity = 1d;
+
+        foreach (var row in _rows)
+        {
+            row.BeginAnimation(Canvas.TopProperty, null);
+            row.BeginAnimation(TextBlock.FontSizeProperty, null);
+            row.BeginAnimation(OpacityProperty, null);
+        }
+
+        var plan = _scrollPlan;
+
+        _rowTexts[0] = _rowTexts[1];
+        _rowTexts[1] = _rowTexts[2];
+        _rowTexts[2] = _rowTexts[3];
+
+        // The line that has just been sung keeps its highlight as it leaves — it is the row that dims,
+        // not the row that changes colour, which is what keeps the previous line from flickering grey at
+        // the exact moment the eye has followed it up there.
+        SetRow(0, _rowTexts[0], active: false);
+        SetRow(1, _rowTexts[1], active: true);
+        SetRow(2, _rowTexts[2], active: false);
+        SetRow(3, string.Empty, active: false);
+
+        _currentRow = 1;
+        _row1Elements = _paint.ElementCount;
+
+        LyricLines.Height = plan.BlockHeight;
+        ApplyFrame(plan.Rest);
+        PaintHighlight(_paint);
     }
+
+    /// <summary>Lands a scroll in flight. Deliberately the same thing as letting it finish.</summary>
+    private void CancelScroll() => FinishScroll();
 
     private void ShowIdle()
     {

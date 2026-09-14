@@ -109,35 +109,39 @@
                     </Button>
                 </StackPanel>
 
-                <!-- Lyrics: the line being sung, with one either side for context. The active line is
-                     one inline per character, so the card lights them up by changing colour and
-                     nothing else — see WidgetCard.BuildRuns for why that matters.
+                <!-- Lyrics: the line being sung, with one either side for context, over a fourth row
+                     parked below the clip. The active line is one inline per character, so the card
+                     lights them up by changing colour and nothing else — see WidgetCard.SetRow for
+                     why that matters.
 
-                     The block only ever moves as a whole, and only through a RenderTransform, never a
-                     LayoutTransform: a layout transform re-measures on every frame, which would put
-                     back exactly the sideways twitch the per-character inlines exist to remove.
+                     Four rows, because three can only ever be swapped: a line arriving from below has to
+                     exist before the motion starts, or what the eye reads is the old line sliding off
+                     and a new one appearing in its place. Row positions are absolute (Canvas.Top) rather
+                     than stacked, so a row's height moves nothing but itself — the slot heights are not
+                     equal, and "shift the block up by one line" is therefore not one distance. Row 3
+                     sits exactly at the clip's bottom edge, which is what makes filling it in invisible.
 
                      No wrapping: a wrapped line would grow into its neighbours and make the card's
                      height depend on the words, which a resizable window cannot afford. A long line
-                     ellipsises instead.
+                     ellipsises instead — which is why each row is given the text column's width in code
+                     rather than sizing to its own text, as a Canvas child otherwise would.
 
                      The sizes below are the design values for the default 440x176 card; SetCardSize
-                     recomputes all of them from the card's height so the block grows with the card and
-                     still fits at the minimum size. -->
+                     recomputes the canvas height, the row offsets and the type from the card's height so
+                     the block grows with the card and still fits at the minimum size. -->
                 <Grid Grid.Row="2" Margin="0,4,0,4" ClipToBounds="True">
-                    <StackPanel x:Name="LyricLines" VerticalAlignment="Center" RenderTransformOrigin="0,0">
-                        <StackPanel.RenderTransform>
-                            <TranslateTransform x:Name="LyricShift" Y="0" />
-                        </StackPanel.RenderTransform>
-                        <TextBlock x:Name="LyricPrevious" Height="18" FontSize="13"
+                    <Canvas x:Name="LyricLines" Height="67" VerticalAlignment="Center" ClipToBounds="True">
+                        <TextBlock x:Name="LyricRow0" Canvas.Top="0" FontSize="13"
                                    Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="LyricCurrent" Height="31" FontSize="22"
+                        <TextBlock x:Name="LyricRow1" Canvas.Top="18" FontSize="22"
                                    TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="LyricNext" Height="18" FontSize="13"
+                        <TextBlock x:Name="LyricRow2" Canvas.Top="49" FontSize="13"
                                    Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
-                    <!-- Shown instead of the three lines when there is nothing to scroll. The area
-                         keeps its size either way, so the card never changes height on its own. -->
+                        <TextBlock x:Name="LyricRow3" Canvas.Top="67" FontSize="13"
+                                   Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
+                    </Canvas>
+                    <!-- Shown instead of the rows when there is nothing to scroll. The area keeps its
+                         size either way, so the card never changes height on its own. -->
                     <TextBlock x:Name="LyricStatus" VerticalAlignment="Center"
                                FontSize="13" Foreground="#73FFFFFF"
                                TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
