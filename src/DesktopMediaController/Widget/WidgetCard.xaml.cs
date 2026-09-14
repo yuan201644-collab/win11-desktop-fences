@@ -41,58 +41,12 @@ public sealed partial class WidgetCard : UserControl
     // ---- lyric metrics ------------------------------------------------------------------------
 
     /// <summary>
-    /// Everything in the card that is not the lyric block itself: the grid's outer margin, the shell's
-    /// border, the title / artist / progress / transport rows, and the lyric block's own margin.
+    /// Everything the text column does not get: shell border, grid margins, cover, its gap.
     /// </summary>
     /// <remarks>
-    /// A constant rather than a measurement because the card's layout is fixed: only the lyric row is
-    /// star-sized. Measured against a real 440x176 card — the progress bar sits at y=129..132, which
-    /// leaves the lyric area exactly 79 DIP including its 8 DIP of margin — and 176 - 105 = 71 is what
-    /// that arithmetic gives back.
+    /// <see cref="LyricTypeScale"/> owns how much of that column the lyric type may use; this is the
+    /// part of the sum that only the card's own XAML knows about, so it stays here.
     /// </remarks>
-    private const double LyricChromeDip = 105;
-
-    /// <summary>Height of the whole three-line block at the default card size.</summary>
-    private const double DesignLyricAreaDip = 71;
-
-    /// <summary>
-    /// Design type sizes and row heights, for a 440x176 card.
-    /// </summary>
-    /// <remarks>
-    /// The middle row is deliberately 1.69x the outer two. Measured budget at the default size: 18 +
-    /// 31 + 18 = 67 DIP against 71 available, so a four-DIP cushion absorbs rounding. Growing the
-    /// emphasised line further — or letting it wrap to two lines — needs 97 DIP of a 67 DIP budget,
-    /// i.e. a card 30 DIP taller, which is why it is not done here.
-    /// </remarks>
-    private const double DesignContextFont = 13;
-    private const double DesignCurrentFont = 22;
-    private const double DesignContextRow = 18;
-    private const double DesignCurrentRow = 31;
-
-    /// <summary>
-    /// Bounds on how far the block may scale with the card.
-    /// </summary>
-    /// <remarks>
-    /// The floor is legibility: at the minimum card size the available height would put the context
-    /// rows near 7px, and the block then overflows its slot symmetrically instead — which is a better
-    /// failure, because the emphasised middle row is the one that survives being clipped. The ceiling
-    /// only stops a deliberately huge card from turning into four words.
-    /// </remarks>
-    private const double MinLyricScale = 0.72;
-    private const double MaxLyricScale = 2.6;
-
-    /// <summary>
-    /// How many characters the line being sung must still be able to show.
-    /// </summary>
-    /// <remarks>
-    /// The reason the block's growth is capped by width and not only by height. Type that scales with
-    /// height alone is fine on a card that grew in both directions and wrong on one that was merely
-    /// made taller: measured on a real 441x255 card, height alone asked for a 46px line, which fitted
-    /// six characters of the one line the user is actually trying to read.
-    /// </remarks>
-    private const double MinCharsPerCurrentLine = 10;
-
-    /// <summary>Everything the text column does not get: shell border, grid margins, cover, its gap.</summary>
     private const double NonTextChromeDip = 36;
 
     /// <summary>Length of each half of the scroll: out, then back in.</summary>
@@ -109,6 +63,17 @@ public sealed partial class WidgetCard : UserControl
     private static readonly Brush RemainingBrush = FrozenBrush(0x32, 0xFF, 0xFF, 0xFF);
 
     private WidgetSize _size;
+
+    /// <summary>
+    /// The type scale the block settled on for the current card size, and the width of the text column.
+    /// </summary>
+    /// <remarks>
+    /// Kept because the emphasised line's size is re-derived every time the song moves on to a new line
+    /// — a longer line has to be set smaller to be shown whole — and there is no line to measure at the
+    /// moment the card is resized.
+    /// </remarks>
+    private double _blockScale = 1d;
+    private double _textWidthDip;
 
     // ---- lyric painting state -----------------------------------------------------------------
 
@@ -195,30 +160,46 @@ public sealed partial class WidgetCard : UserControl
     /// The block is the one part of the card that has to grow with the card — the star-sized row is
     /// where a resize puts its extra height, and a bigger box with the same size words in it would just
     /// be more empty space. It is bounded from two sides, though: by the height it has to fill, and by
-    /// the width a single line has to stay readable in. Doing both here also means the minimum card
-    /// cannot end up with a lyric block taller than its slot, which would have been clipped away.
+    /// the width a single line has to stay readable in. Both, and the arithmetic behind them, live in
+    /// <see cref="LyricTypeScale"/>. Doing it there also means the minimum card cannot end up with a
+    /// lyric block taller than its slot, which would have been clipped away.
     /// </remarks>
     private void ApplyLyricMetrics(double cardHeightDip, double textWidthDip)
     {
-        var available = Math.Max(0, cardHeightDip - LyricChromeDip);
-        var byHeight = available / DesignLyricAreaDip;
-        var byWidth = Math.Max(0, textWidthDip) / MinCharsPerCurrentLine / DesignCurrentFont;
+        _textWidthDip = Math.Max(0d, textWidthDip);
 
-        var scale = Math.Clamp(Math.Min(byHeight, byWidth), MinLyricScale, MaxLyricScale);
+        var fit = LyricTypeScale.Measure(cardHeightDip, _textWidthDip, 0);
+        _blockScale = fit.BlockScale;
 
-        var current = DesignCurrentFont * scale;
-        var context = DesignContextFont * scale;
+        LyricCurrent.Height = fit.CurrentRowHeight;
 
-        LyricCurrent.FontSize = current;
-        LyricCurrent.Height = DesignCurrentRow * scale;
+        LyricPrevious.FontSize = fit.ContextFontSize;
+        LyricPrevious.Height = fit.ContextRowHeight;
 
-        LyricPrevious.FontSize = context;
-        LyricPrevious.Height = DesignContextRow * scale;
+        LyricNext.FontSize = fit.ContextFontSize;
+        LyricNext.Height = fit.ContextRowHeight;
 
-        LyricNext.FontSize = context;
-        LyricNext.Height = DesignContextRow * scale;
+        LyricStatus.FontSize = fit.ContextFontSize;
 
-        LyricStatus.FontSize = context;
+        ApplyCurrentLineFont(0);
+    }
+
+    /// <summary>
+    /// Sets the emphasised line's type size for a line of <paramref name="elementCount"/> characters.
+    /// </summary>
+    /// <remarks>
+    /// Called once per line rather than once per syllable: the count does not change while a line is
+    /// being sung, and re-deriving it on every tick would be a needless assignment inside the one loop
+    /// that has to stay cheap. The line's row height is deliberately <i>not</i> touched here — it stays
+    /// on the block scale so the scroll always travels the same distance.
+    /// </remarks>
+    private void ApplyCurrentLineFont(int elementCount)
+    {
+        var scale = _textWidthDip > 0d
+            ? LyricTypeScale.CurrentScaleFor(_blockScale, _textWidthDip, elementCount)
+            : _blockScale;
+
+        LyricCurrent.FontSize = LyricTypeScale.CurrentFont * scale;
     }
 
     /// <summary>
@@ -334,6 +315,9 @@ public sealed partial class WidgetCard : UserControl
         _pending = lyrics;
         _shownIndex = lyrics.CurrentIndex;
 
+        // Before the inlines are built, so the new line is shaped once at its final size rather than
+        // twice. The line's own length is what decides that size: see ApplyCurrentLineFont.
+        ApplyCurrentLineFont(lyrics.Current.ElementCount);
         BuildRuns(lyrics.Current.Text);
         PaintHighlight(lyrics.Current);
     }
@@ -418,7 +402,7 @@ public sealed partial class WidgetCard : UserControl
         _pending = lyrics;
 
         var lift = LyricCurrent.Height;
-        if (double.IsNaN(lift) || lift <= 0) lift = DesignCurrentRow;
+        if (double.IsNaN(lift) || lift <= 0) lift = LyricTypeScale.CurrentRow;
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
 
