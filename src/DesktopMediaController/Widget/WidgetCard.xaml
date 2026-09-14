@@ -109,30 +109,37 @@
                     </Button>
                 </StackPanel>
 
-                <!-- Lyrics: the active line plus one either side for context. The active line is three
-                     adjacent runs — already sung, the syllable being sung, still to come — which is
-                     how per-syllable highlighting works without measuring a single glyph.
+                <!-- Lyrics: the line being sung, with one either side for context. The active line is
+                     one inline per character, so the card lights them up by changing colour and
+                     nothing else — see WidgetCard.BuildRuns for why that matters.
+
+                     The block only ever moves as a whole, and only through a RenderTransform, never a
+                     LayoutTransform: a layout transform re-measures on every frame, which would put
+                     back exactly the sideways twitch the per-character inlines exist to remove.
+
                      No wrapping: a wrapped line would grow into its neighbours and make the card's
-                     height depend on the words, which a resizable window cannot afford. -->
-                <Grid Grid.Row="2" Margin="0,6,0,6" ClipToBounds="True">
-                    <StackPanel x:Name="LyricLines" VerticalAlignment="Center">
-                        <TextBlock x:Name="LyricPrevious" Height="17" FontSize="11"
+                     height depend on the words, which a resizable window cannot afford. A long line
+                     ellipsises instead.
+
+                     The sizes below are the design values for the default 440x176 card; SetCardSize
+                     recomputes all of them from the card's height so the block grows with the card and
+                     still fits at the minimum size. -->
+                <Grid Grid.Row="2" Margin="0,4,0,4" ClipToBounds="True">
+                    <StackPanel x:Name="LyricLines" VerticalAlignment="Center" RenderTransformOrigin="0,0">
+                        <StackPanel.RenderTransform>
+                            <TranslateTransform x:Name="LyricShift" Y="0" />
+                        </StackPanel.RenderTransform>
+                        <TextBlock x:Name="LyricPrevious" Height="18" FontSize="13"
                                    Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
-                        <TextBlock x:Name="LyricCurrent" Height="17" FontSize="11.5"
-                                   TextTrimming="CharacterEllipsis">
-                            <Run x:Name="LyricSung" Foreground="#8FC5FF" />
-                            <!-- Colour only, never weight: a bolder syllable is a wider syllable, and
-                                 the whole line would shift sideways on every single beat. -->
-                            <Run x:Name="LyricNow" Foreground="#FFFFFFFF" />
-                            <Run x:Name="LyricRemaining" Foreground="#4DFFFFFF" />
-                        </TextBlock>
-                        <TextBlock x:Name="LyricNext" Height="17" FontSize="11"
+                        <TextBlock x:Name="LyricCurrent" Height="31" FontSize="22"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="LyricNext" Height="18" FontSize="13"
                                    Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                     <!-- Shown instead of the three lines when there is nothing to scroll. The area
                          keeps its size either way, so the card never changes height on its own. -->
                     <TextBlock x:Name="LyricStatus" VerticalAlignment="Center"
-                               FontSize="11" Foreground="#73FFFFFF"
+                               FontSize="13" Foreground="#73FFFFFF"
                                TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
                 </Grid>
 

@@ -21,21 +21,41 @@ public readonly record struct LyricCursor(int LineIndex, int SungSyllableCount)
 }
 
 /// <summary>
-/// One lyric line split into the three pieces the karaoke renderer needs: everything the playhead has
-/// already passed, the syllable it is on now, and everything still to come.
+/// One lyric line reduced to what the karaoke renderer needs: the text, and where the playhead sits
+/// inside it — both measured in <i>text elements</i>, not UTF-16 code units.
 /// </summary>
-/// <param name="Sung">Text before the current syllable.</param>
-/// <param name="Current">
-/// The syllable being sung, or the whole line when the provider only timed the line.
+/// <remarks>
+/// <para>
+/// Deliberately the whole line plus two counts, rather than the sung / current / remaining substrings
+/// this used to carry. The substrings existed so the card could hand each piece to its own
+/// <c>Run</c>; but assigning to a <c>Run</c>'s text invalidates the measure, so the line re-flowed
+/// sideways every time the boundary moved by one character — the "characters jumping" the arrangement
+/// was meant to avoid. Counts let the card build one inline per character up front and afterwards
+/// touch nothing but their colour, which invalidates the render only.
+/// </para>
+/// <para>
+/// The three substrings are still derivable — slice <see cref="Text"/> at the character offsets the
+/// syllables give — so nothing that needs the old view has lost it.
+/// </para>
+/// </remarks>
+/// <param name="Text">The whole line, exactly as the provider published it.</param>
+/// <param name="ElementCount">How many reader-visible characters <paramref name="Text"/> has.</param>
+/// <param name="SungElements">How many of them the playhead has already passed.</param>
+/// <param name="CurrentElements">
+/// How many are being sung right now. The whole line when the provider only timed the line, which is
+/// how "highlight the whole line" is expressed without a second code path anywhere else.
 /// </param>
-/// <param name="Remaining">Text after the current syllable.</param>
-public readonly record struct LyricLinePaint(string Sung, string Current, string Remaining)
+public readonly record struct LyricLinePaint(
+    string Text,
+    int ElementCount,
+    int SungElements,
+    int CurrentElements)
 {
     /// <summary>Nothing to draw — used for blank and instrumental lines.</summary>
-    public static readonly LyricLinePaint Empty = new(string.Empty, string.Empty, string.Empty);
+    public static readonly LyricLinePaint Empty = new(string.Empty, 0, 0, 0);
 
     /// <summary>Whether the playhead has moved past the whole line.</summary>
-    public bool IsFullySung => Remaining.Length == 0;
+    public bool IsFullySung => SungElements + CurrentElements >= ElementCount;
 }
 
 /// <summary>
@@ -156,36 +176,38 @@ public static class LyricTimeline
     }
 
     /// <summary>
-    /// Splits a line into sung / current / remaining.
+    /// Resolves a line and a cursor into the counts the renderer paints from.
     /// </summary>
     /// <remarks>
-    /// A line with no syllables puts its whole text in <see cref="LyricLinePaint.Current"/> and leaves
-    /// the other two empty. That is the "highlight the whole line" degradation, and expressing it as
-    /// the same three-field shape is what lets the card run one code path: it colours
-    /// <c>Current</c> as active and the others as inactive, and a line-level source simply ends up
-    /// with nothing in them.
+    /// A line with no syllables reports the whole line as current and nothing as sung. That is the
+    /// "highlight the whole line" degradation, and expressing it through the same two counters is what
+    /// lets the card run one code path: it colours what is sung one way, what is current another, and a
+    /// line-level source simply ends up with all of it in the second bucket.
     /// </remarks>
     public static LyricLinePaint Split(LyricLine line, LyricCursor cursor)
     {
         ArgumentNullException.ThrowIfNull(line);
 
-        if (!line.IsSyllabic) return new LyricLinePaint(string.Empty, line.Text, string.Empty);
+        var text = line.Text;
+        var total = TextElements.Count(text);
+
+        if (!line.IsSyllabic) return new LyricLinePaint(text, total, 0, total);
 
         var count = Math.Clamp(cursor.SungSyllableCount, 0, line.Syllables.Count);
-        if (count == 0) return new LyricLinePaint(string.Empty, string.Empty, line.Text);
+        if (count == 0) return new LyricLinePaint(text, total, 0, 0);
 
+        // Syllable lengths are UTF-16 lengths because that is the coordinate system the provider cut
+        // its own text in; they are converted to text elements on the way out.
         var sungEnd = 0;
         for (var i = 0; i < count - 1; i++) sungEnd += line.Syllables[i].Text.Length;
 
-        var current = line.Syllables[count - 1].Text;
+        // Clamped rather than trusted, because "the syllables reproduce the text exactly" is what
+        // providers are supposed to guarantee, not what they do — and this runs inside a paint
+        // callback, where a provider contradicting itself must not be able to take the card down.
+        var start = Math.Clamp(sungEnd, 0, text.Length);
+        var end = Math.Clamp(start + line.Syllables[count - 1].Text.Length, start, text.Length);
 
-        // Sliced rather than concatenated, because the line's text is what the provider published and
-        // the syllables are supposed to reproduce it exactly; slicing keeps that guarantee visible
-        // instead of quietly overwriting it. Clamped because "supposed to" is not "does", and a
-        // provider that disagrees with itself must not be able to throw out of a paint callback.
-        var start = Math.Clamp(sungEnd, 0, line.Text.Length);
-        var end = Math.Clamp(start + current.Length, start, line.Text.Length);
-
-        return new LyricLinePaint(line.Text[..start], current, line.Text[end..]);
+        var (sung, current) = TextElements.CountAt(text, start, end);
+        return new LyricLinePaint(text, total, sung, current);
     }
 }

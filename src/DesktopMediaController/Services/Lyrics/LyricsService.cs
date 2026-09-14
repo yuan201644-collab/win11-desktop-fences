@@ -167,6 +167,7 @@ internal sealed class LyricsService : IDisposable
         var notes = new List<string>(SourceOrder.Length);
         var contradicted = new List<Searchers>();
         var bestLineLevel = (LyricsDocument?)null;
+        var bestRaw = (RawLyrics?)null;
         var bestSource = string.Empty;
         var attempted = 0;
         var benched = 0;
@@ -210,12 +211,13 @@ internal sealed class LyricsService : IDisposable
 
             if (attempt.Document.HasSyllables)
             {
-                return Accept(key, attempt.Document, source.ToString(), title, notes);
+                return Accept(key, attempt.Document, source.ToString(), title, notes, attempt.Raw);
             }
 
             if (bestLineLevel is null)
             {
                 bestLineLevel = attempt.Document;
+                bestRaw = attempt.Raw;
                 bestSource = source.ToString();
             }
         }
@@ -229,7 +231,7 @@ internal sealed class LyricsService : IDisposable
                 anotherSourceFound: bestLineLevel is not null);
         }
 
-        if (bestLineLevel is not null) return Accept(key, bestLineLevel, bestSource, title, notes);
+        if (bestLineLevel is not null) return Accept(key, bestLineLevel, bestSource, title, notes, bestRaw);
 
         // Only claim the track has no lyrics when every source actually answered. If any of them was
         // benched or failed we learned nothing about it, and saying "none" would be a lie that the
@@ -239,6 +241,8 @@ internal sealed class LyricsService : IDisposable
             : LyricsState.None;
 
         LyricsLog.Write($"“{title}” / “{session.Artist}” => {state}  [{string.Join(" | ", notes)}]");
+        // Remembered in memory only, on purpose: "no lyrics" is the answer most likely to change the
+        // moment a provider comes back, and persisting it would outlive the outage that caused it.
         if (state == LyricsState.None) _answered[key] = LyricsDocument.Empty;
 
         return new LyricsLookup(state, LyricsDocument.Empty, string.Empty);
@@ -249,13 +253,41 @@ internal sealed class LyricsService : IDisposable
         LyricsDocument document,
         string source,
         string title,
-        List<string> notes)
+        List<string> notes,
+        RawLyrics? raw)
     {
-        _answered[key] = document;
+        Remember(key, source, document, raw);
         LyricsLog.Write(
             $"“{title}” => {source} {(document.HasSyllables ? "逐字" : "整行")} {document.Lines.Count} 行  "
             + $"[{string.Join(" | ", notes)}]");
         return new LyricsLookup(LyricsState.Ready, document, source);
+    }
+
+    /// <summary>
+    /// Records a track's lyrics: in memory for this session, and on disk for the next one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately the <b>only</b> place a found document is recorded. The disk half of this used to
+    /// have no caller at all — <c>LyricsCache.Put</c> existed, was correct, and was never invoked from
+    /// anywhere — so every launch re-asked the providers for the same songs. That is precisely the
+    /// traffic pattern the cache was written to avoid, and these services answer it by returning a
+    /// success code and an empty result, which the widget can only render as "no lyrics". Keeping both
+    /// stores behind one method is what stops a later edit from adding a third way to succeed that
+    /// forgets one of them.
+    /// </para>
+    /// <para>
+    /// The raw text and its format are what gets written, not the parsed model: an upgrade of the
+    /// parsing library then re-reads old entries with the new parser instead of stranding them.
+    /// </para>
+    /// </remarks>
+    private void Remember(string key, string source, LyricsDocument document, RawLyrics? raw)
+    {
+        _answered[key] = document;
+
+        // Written synchronously, on the UI thread: an entry is a few tens of kilobytes and this happens
+        // once per track change, so it costs less than the frame it rides on.
+        if (raw is { } value) _cache.Put(key, source, value.RawType, value.Text);
     }
 
     /// <summary>
@@ -301,7 +333,8 @@ internal sealed class LyricsService : IDisposable
         return new SourceAttempt(
             document,
             Answered: true,
-            Note: $"{source}={(document.HasSyllables ? "syllabic" : "line")}({document.Lines.Count})");
+            Note: $"{source}={(document.HasSyllables ? "syllabic" : "line")}({document.Lines.Count})",
+            Raw: raw.Value);
     }
 
     /// <summary>
@@ -382,10 +415,14 @@ internal sealed class LyricsService : IDisposable
 
     private readonly record struct RawLyrics(string Text, LyricsRawTypes RawType);
 
-    private readonly record struct SourceAttempt(LyricsDocument Document, bool Answered, string Note)
+    private readonly record struct SourceAttempt(
+        LyricsDocument Document,
+        bool Answered,
+        string Note,
+        RawLyrics? Raw)
     {
-        public static SourceAttempt Failed(string note) => new(LyricsDocument.Empty, false, note);
+        public static SourceAttempt Failed(string note) => new(LyricsDocument.Empty, false, note, null);
 
-        public static SourceAttempt Empty(string note) => new(LyricsDocument.Empty, true, note);
+        public static SourceAttempt Empty(string note) => new(LyricsDocument.Empty, true, note, null);
     }
 }

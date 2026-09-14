@@ -98,18 +98,19 @@ public sealed class LyricTimelineTests
         Assert.True(cursor.HasLine);
     }
 
-    // ---- splitting the line for the renderer ----------------------------------------------------
+    // ---- resolving the line for the renderer ----------------------------------------------------
 
     [Fact]
-    public void Split_ALineWithNoSyllables_PutsTheWholeLineInCurrent()
+    public void Split_ALineWithNoSyllables_ReportsTheWholeLineAsCurrent()
     {
-        // This is the "highlight the whole line" degradation, expressed in the same three fields as
-        // the karaoke case so the card needs only one code path.
+        // The "highlight the whole line" degradation, expressed through the same two counters as the
+        // karaoke case, so the card needs only one code path.
         var paint = LyricTimeline.Split(Document[2], new LyricCursor(2, 0));
 
-        Assert.Equal(string.Empty, paint.Sung);
-        Assert.Equal("（间奏，无逐字）", paint.Current);
-        Assert.Equal(string.Empty, paint.Remaining);
+        Assert.Equal("（间奏，无逐字）", paint.Text);
+        Assert.Equal(8, paint.ElementCount);
+        Assert.Equal(0, paint.SungElements);
+        Assert.Equal(8, paint.CurrentElements);
     }
 
     [Fact]
@@ -117,9 +118,11 @@ public sealed class LyricTimelineTests
     {
         var paint = LyricTimeline.Split(Document[0], new LyricCursor(0, 0));
 
-        Assert.Equal(string.Empty, paint.Sung);
-        Assert.Equal(string.Empty, paint.Current);
-        Assert.Equal("晴天", paint.Remaining);
+        Assert.Equal("晴天", paint.Text);
+        Assert.Equal(2, paint.ElementCount);
+        Assert.Equal(0, paint.SungElements);
+        Assert.Equal(0, paint.CurrentElements);
+        Assert.False(paint.IsFullySung);
     }
 
     [Fact]
@@ -127,34 +130,38 @@ public sealed class LyricTimelineTests
     {
         var paint = LyricTimeline.Split(Document[0], new LyricCursor(0, 1));
 
-        Assert.Equal(string.Empty, paint.Sung);
-        Assert.Equal("晴", paint.Current);
-        Assert.Equal("天", paint.Remaining);
+        Assert.Equal("晴天", paint.Text);
+        Assert.Equal(0, paint.SungElements);
+        Assert.Equal(1, paint.CurrentElements);
     }
 
     [Fact]
-    public void Split_OnTheLastSyllable_SwallowsTheRest()
+    public void Split_OnTheLastSyllable_LeavesNothingUnaccountedFor()
     {
         var paint = LyricTimeline.Split(Document[1], new LyricCursor(1, 3));
 
-        Assert.Equal("词：", paint.Sung);
-        Assert.Equal("周", paint.Current);
-        Assert.Equal(string.Empty, paint.Remaining);
+        Assert.Equal("词：周", paint.Text);
+        Assert.Equal(3, paint.ElementCount);
+        Assert.Equal(2, paint.SungElements);
+        Assert.Equal(1, paint.CurrentElements);
         Assert.True(paint.IsFullySung);
     }
 
     [Fact]
-    public void Split_TheThreePiecesAlwaysReconstructTheLine()
+    public void Split_TheCountsAlwaysPartitionTheLineWithoutOverlappingOrRunningOffTheEnd()
     {
-        // The card paints the pieces as three adjacent runs, so any gap or duplication between them
-        // would show up as a visible seam in the middle of a line.
+        // The card gives every character one inline and colours it from these two counters, so a count
+        // that overran would colour nothing — or index nothing at all.
         for (var line = 0; line < Document.Length; line++)
         {
             var source = Document[line];
             for (var count = 0; count <= source.Syllables.Count; count++)
             {
                 var paint = LyricTimeline.Split(source, new LyricCursor(line, count));
-                Assert.Equal(source.Text, paint.Sung + paint.Current + paint.Remaining);
+
+                Assert.Equal(source.Text, paint.Text);
+                Assert.InRange(paint.SungElements, 0, paint.ElementCount);
+                Assert.InRange(paint.CurrentElements, 0, paint.ElementCount - paint.SungElements);
             }
         }
     }
@@ -163,14 +170,16 @@ public sealed class LyricTimelineTests
     public void Split_PreservesWhitespaceSyllablesSoLatinLyricsKeepTheirWordBreaks()
     {
         // QRC publishes the space between two English words as its own syllable. Dropping or
-        // normalising it would run the words together.
+        // normalising it would run the words together — and it has to be counted like any other
+        // character, or every word after it would light up one place too early.
         var line = Built(0, ("Hel", 0, 200), ("lo", 200, 400), (" ", 400, 450), ("world", 450, 900));
 
         var paint = LyricTimeline.Split(line, new LyricCursor(0, 3));
 
-        Assert.Equal("Hello", paint.Sung);
-        Assert.Equal(" ", paint.Current);
-        Assert.Equal("world", paint.Remaining);
+        Assert.Equal("Hello world", paint.Text);
+        Assert.Equal(11, paint.ElementCount);
+        Assert.Equal(5, paint.SungElements);
+        Assert.Equal(1, paint.CurrentElements);
     }
 
     [Fact]
@@ -180,9 +189,29 @@ public sealed class LyricTimelineTests
 
         var paint = LyricTimeline.Split(line, new LyricCursor(0, 1));
 
-        Assert.Equal(string.Empty, paint.Sung);
-        Assert.Equal("啊", paint.Current);
-        Assert.Equal(string.Empty, paint.Remaining);
+        Assert.Equal("啊", paint.Text);
+        Assert.Equal(1, paint.ElementCount);
+        Assert.Equal(0, paint.SungElements);
+        Assert.Equal(1, paint.CurrentElements);
+    }
+
+    [Fact]
+    public void Split_CountsAnEmojiAsOneCharacterSoTheRendererCannotCutItInHalf()
+    {
+        // A surrogate pair is two UTF-16 code units but one character to a reader. The card builds one
+        // inline per character and colours them by index, so counting code units here would leave every
+        // line containing an emoji permanently off by one — and would hand the text engine a lone half.
+        // Written as an escape so the test says what it means without depending on the file's encoding.
+        const string note = "\U0001F3B5";
+        var line = Built(0, ("晴", 0, 100), (note, 100, 300), ("天", 300, 500));
+
+        var paint = LyricTimeline.Split(line, new LyricCursor(0, 2));
+
+        Assert.Equal(4, paint.Text.Length);          // UTF-16 code units, for contrast
+        Assert.Equal(3, paint.ElementCount);         // what a reader sees
+        Assert.Equal(1, paint.SungElements);
+        Assert.Equal(1, paint.CurrentElements);
+        Assert.False(paint.IsFullySung);
     }
 
     [Fact]
@@ -196,9 +225,9 @@ public sealed class LyricTimelineTests
 
         var paint = LyricTimeline.Split(inconsistent, new LyricCursor(0, 1));
 
-        Assert.Equal(string.Empty, paint.Sung);
-        Assert.Equal("ABCDE", paint.Current);
-        Assert.Equal(string.Empty, paint.Remaining);
+        Assert.Equal("AB", paint.Text);
+        Assert.Equal(0, paint.SungElements);
+        Assert.Equal(2, paint.CurrentElements);
     }
 
     [Fact]
@@ -206,8 +235,22 @@ public sealed class LyricTimelineTests
     {
         var paint = LyricTimeline.Split(Document[0], new LyricCursor(0, 99));
 
-        Assert.Equal("晴", paint.Sung);
-        Assert.Equal("天", paint.Current);
+        Assert.Equal(1, paint.SungElements);
+        Assert.Equal(1, paint.CurrentElements);
+        Assert.True(paint.IsFullySung);
+    }
+
+    [Fact]
+    public void Split_ReportsTheLineTextVerbatim_SoTheCardCanTellWhenToRebuildItsInlines()
+    {
+        // The card keeps one inline per character and only rebuilds when this string changes. A
+        // normalised or trimmed copy would make two different lines compare equal and leave stale
+        // glyphs on screen.
+        const string awkward = "  Spaced  出  ";
+
+        var paint = LyricTimeline.Split(new LyricLine(0, 100, awkward), new LyricCursor(0, 0));
+
+        Assert.Equal(awkward, paint.Text);
     }
 
     // ---- the three-line window ------------------------------------------------------------------
@@ -231,7 +274,9 @@ public sealed class LyricTimelineTests
         var window = LyricTimeline.WindowAt(new LyricsDocument(Document), 2_900);
 
         Assert.Equal("晴天", window.Previous);
-        Assert.Equal("词：周", window.Current.Sung + window.Current.Current + window.Current.Remaining);
+        Assert.Equal("词：周", window.Current.Text);
+        Assert.Equal(2, window.Current.SungElements);
+        Assert.Equal(1, window.Current.CurrentElements);
         Assert.Equal("（间奏，无逐字）", window.Next);
         Assert.Equal(1, window.CurrentIndex);
     }
@@ -254,7 +299,7 @@ public sealed class LyricTimelineTests
         var window = LyricTimeline.WindowAt(new LyricsDocument(Document), 999_999);
 
         Assert.Equal(2, window.CurrentIndex);
-        Assert.Equal("（间奏，无逐字）", window.Current.Current);
+        Assert.Equal("（间奏，无逐字）", window.Current.Text);
     }
 
     [Fact]
@@ -266,7 +311,7 @@ public sealed class LyricTimelineTests
 
         Assert.Equal(string.Empty, window.Previous);
         Assert.Equal(string.Empty, window.Next);
-        Assert.Equal("唯一一行", window.Current.Current);
+        Assert.Equal("唯一一行", window.Current.Text);
     }
 
     [Fact]
