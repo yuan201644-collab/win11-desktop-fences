@@ -204,6 +204,7 @@ internal sealed class SmtcMediaSource : IDisposable
                 {
                     Position = timeline.Position,
                     Duration = duration > TimeSpan.Zero ? duration : TimeSpan.Zero,
+                    HasTimeline = true,
                     LastUpdated = timeline.LastUpdatedTime,
                 };
             }

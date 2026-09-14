@@ -31,6 +31,25 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Lyric sourcing, matching, parsing and QRC/KRC decryption. Referenced as a binary on purpose:
+         re-implementing the QQ音乐的 sign/TripleDES pipeline ourselves would be a permanent
+         maintenance debt, whereas here a breaking upstream change is fixed by bumping a version.
+         The lyrics layer must stay behind our own service (Services/Lyrics) so this dependency is
+         swappable. See third_party/THIRD-PARTY-NOTICES.md. -->
+    <PackageReference Include="Lyricify.Lyrics.Helper" Version="0.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Apache-2.0 requires the licence text to travel with the binary. The NuGet package ships no
+         LICENSE of its own (verified), so this copy is the only one a recipient gets: it must land
+         next to the executable, not merely live in the repository. -->
+    <Content Include="third_party\THIRD-PARTY-NOTICES.md;third_party\Lyricify-Lyrics-Helper-LICENSE.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- UseWindowsForms adds System.Drawing and System.Windows.Forms to the implicit usings, which
          collide with the WPF types this project uses (Application, Image, Color, ...). Removed here
          so every file states what it needs; TrayIconHost aliases the WinForms namespaces instead. -->

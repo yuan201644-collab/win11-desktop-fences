@@ -24,14 +24,45 @@ public sealed class PlacementStoreTests
     }
 
     [Fact]
-    public void SaveThenLoad_RoundTripsThePhysicalPosition()
+    public void SaveThenLoad_RoundTripsThePlacement()
     {
         var path = TempFile();
-        var saved = new WidgetPosition(-1200, 340);
+        var saved = new WidgetPlacement(-1200, 340, 520, 220);
 
         PlacementStore.Save(path, saved);
 
         Assert.Equal(saved, PlacementStore.Load(path));
+    }
+
+    [Fact]
+    public void Load_FileWrittenBeforeTheCardWasResizable_KeepsThePositionButTakesTheDefaultSize()
+    {
+        // Exactly what an older build left behind: a position and nothing else. The position is the
+        // part the user actually chose, so it must survive; the size did not exist yet.
+        var path = TempFile();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{ "X": -1912, "Y": 12 }""");
+
+        var placement = PlacementStore.Load(path);
+
+        Assert.NotNull(placement);
+        Assert.Equal(-1912, placement!.Value.X);
+        Assert.Equal(12, placement.Value.Y);
+        Assert.Equal(WidgetSize.Default, placement.Value.Size);
+    }
+
+    [Fact]
+    public void Load_FileWithANonsenseSize_ClampsItIntoTheRenderableRange()
+    {
+        var path = TempFile();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{ "X": 0, "Y": 0, "WidthDip": 40, "HeightDip": 9000 }""");
+
+        var placement = PlacementStore.Load(path);
+
+        Assert.NotNull(placement);
+        Assert.Equal(WidgetSize.MinWidthDip, placement!.Value.WidthDip);
+        Assert.Equal(WidgetSize.MaxHeightDip, placement.Value.HeightDip);
     }
 
     [Fact]

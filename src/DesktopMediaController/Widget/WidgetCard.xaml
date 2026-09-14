@@ -38,20 +38,27 @@
         </Style>
     </UserControl.Resources>
 
-    <Border CornerRadius="14"
+    <!-- ClipToBounds because the card is freely resizable: at a small size the lyric block must be
+         cut off rather than drawn over the progress bar. -->
+    <Border x:Name="Shell" CornerRadius="14"
             Background="#E81A1A20"
             BorderBrush="#4D87C5FF"
-            BorderThickness="1">
+            BorderThickness="1"
+            ClipToBounds="True">
+        <!-- The margins are what the resize bands sit inside (see WidgetWindow.HitTestEdge), so nothing
+             here may be closer than ~8px to an edge or the two would fight over the same pixels. -->
         <Grid Margin="12,10,10,10">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="64" />
+                <!-- Width is assigned in code: the cover keeps its apparent size in step with the
+                     card's height, and a square has to be sized in one place. -->
+                <ColumnDefinition x:Name="CoverColumn" Width="64" />
                 <ColumnDefinition Width="12" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
             <!-- Cover art. The glyph stays as the placeholder for sources that publish no thumbnail
                  (and for the idle state); the Image sits on top once one decodes. -->
-            <Border Grid.Column="0" Width="64" Height="64" CornerRadius="8"
+            <Border x:Name="CoverBorder" Grid.Column="0" Width="64" Height="64" CornerRadius="8"
                     Background="#26FFFFFF" ClipToBounds="True" VerticalAlignment="Center">
                 <Grid>
                     <TextBlock x:Name="CoverPlaceholder" Text="&#x266A;" FontSize="24"
@@ -65,8 +72,11 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
+                    <!-- The lyric block. Star-sized so it absorbs whatever extra height a resize gives
+                         the card, instead of leaving the slack in one place. -->
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <!-- Title + close. The close button is docked so a long title ellipsises before it. -->
@@ -99,10 +109,37 @@
                     </Button>
                 </StackPanel>
 
+                <!-- Lyrics: the active line plus one either side for context. The active line is three
+                     adjacent runs — already sung, the syllable being sung, still to come — which is
+                     how per-syllable highlighting works without measuring a single glyph.
+                     No wrapping: a wrapped line would grow into its neighbours and make the card's
+                     height depend on the words, which a resizable window cannot afford. -->
+                <Grid Grid.Row="2" Margin="0,6,0,6" ClipToBounds="True">
+                    <StackPanel x:Name="LyricLines" VerticalAlignment="Center">
+                        <TextBlock x:Name="LyricPrevious" Height="17" FontSize="11"
+                                   Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="LyricCurrent" Height="17" FontSize="11.5"
+                                   TextTrimming="CharacterEllipsis">
+                            <Run x:Name="LyricSung" Foreground="#8FC5FF" />
+                            <!-- Colour only, never weight: a bolder syllable is a wider syllable, and
+                                 the whole line would shift sideways on every single beat. -->
+                            <Run x:Name="LyricNow" Foreground="#FFFFFFFF" />
+                            <Run x:Name="LyricRemaining" Foreground="#4DFFFFFF" />
+                        </TextBlock>
+                        <TextBlock x:Name="LyricNext" Height="17" FontSize="11"
+                                   Foreground="#59FFFFFF" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <!-- Shown instead of the three lines when there is nothing to scroll. The area
+                         keeps its size either way, so the card never changes height on its own. -->
+                    <TextBlock x:Name="LyricStatus" VerticalAlignment="Center"
+                               FontSize="11" Foreground="#73FFFFFF"
+                               TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
+                </Grid>
+
                 <!-- Read-only progress. Two star columns rather than a ProgressBar: the ratio is then
                      set directly and there is no control template to fight with. QQ音乐 reports
                      seek=false, so a draggable bar would be a lie. -->
-                <Grid Grid.Row="2" Height="4" Margin="0,8,0,0" VerticalAlignment="Center">
+                <Grid Grid.Row="3" Height="4" Margin="0,0,0,0" VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition x:Name="ProgressFilledColumn" Width="0*" />
                         <ColumnDefinition x:Name="ProgressRemainingColumn" Width="1*" />
@@ -112,7 +149,7 @@
                             Background="#87C5FF" />
                 </Grid>
 
-                <DockPanel Grid.Row="3" Margin="0,6,0,0" VerticalAlignment="Bottom">
+                <DockPanel Grid.Row="4" Margin="0,6,0,0" VerticalAlignment="Bottom">
                     <TextBlock x:Name="TimeText" DockPanel.Dock="Right" Text="" FontSize="10"
                                Foreground="#8CFFFFFF" VerticalAlignment="Center" Margin="8,0,0,0" />
 

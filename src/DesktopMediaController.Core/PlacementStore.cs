@@ -3,12 +3,13 @@ using System.Text.Json;
 namespace DesktopMediaController.Core;
 
 /// <summary>
-/// Persists the widget's position as JSON and keeps it reachable on the current desktop.
+/// Persists the card's placement — where it is and how big the user made it — as JSON, and keeps it
+/// reachable on the current desktop.
 /// </summary>
 /// <remarks>
-/// Pure logic: no Win32, no WPF. The caller passes the current virtual screen rectangle, which is
-/// what lets a position saved on a monitor that is no longer attached still be pulled back into
-/// view instead of leaving the widget invisible off-desktop.
+/// Pure logic: no Win32, no WPF. The caller passes the current virtual screen rectangle, which is what
+/// lets a placement saved on a monitor that is no longer attached be pulled back into view instead of
+/// leaving the widget invisible off-desktop.
 /// </remarks>
 public static class PlacementStore
 {
@@ -25,16 +26,28 @@ public static class PlacementStore
         "placement.json");
 
     /// <summary>
-    /// Reads the saved position, or <c>null</c> when there is none to trust (missing file,
-    /// unreadable file, malformed JSON).
+    /// Reads the saved placement, or <c>null</c> when there is none to trust (missing file, unreadable
+    /// file, malformed JSON).
     /// </summary>
-    public static WidgetPosition? Load(string filePath)
+    /// <remarks>
+    /// The size is always passed through <see cref="WidgetSize.Coerce"/>, which is also the upgrade
+    /// path: a file written before the card was resizable has no width or height at all, and those
+    /// fields arrive as zero, which the coercion reads as "no opinion" and replaces with the default
+    /// size. Position is trusted as written; it is the caller's job to clamp it onto a real monitor.
+    /// </remarks>
+    public static WidgetPlacement? Load(string filePath)
     {
         ArgumentNullException.ThrowIfNull(filePath);
         try
         {
             if (!File.Exists(filePath)) return null;
-            return JsonSerializer.Deserialize<WidgetPosition>(File.ReadAllText(filePath), Options);
+
+            // Deserialised as a nullable struct so a file containing a literal `null` is a miss rather
+            // than an exception.
+            var placement = JsonSerializer.Deserialize<WidgetPlacement?>(File.ReadAllText(filePath), Options);
+            if (placement is null) return null;
+
+            return placement.Value.WithSize(WidgetSize.Coerce(placement.Value.WidthDip, placement.Value.HeightDip));
         }
         catch (Exception)
         {
@@ -44,15 +57,15 @@ public static class PlacementStore
         }
     }
 
-    /// <summary>Writes the position atomically (temp file + move), creating the folder as needed.</summary>
-    public static void Save(string filePath, WidgetPosition position)
+    /// <summary>Writes the placement atomically (temp file + move), creating the folder as needed.</summary>
+    public static void Save(string filePath, WidgetPlacement placement)
     {
         ArgumentNullException.ThrowIfNull(filePath);
         var dir = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
         var tmp = filePath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(position, Options));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(placement, Options));
         File.Move(tmp, filePath, overwrite: true);
     }
 

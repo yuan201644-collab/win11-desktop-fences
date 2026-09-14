@@ -9,17 +9,9 @@ namespace DesktopMediaController.Core;
 /// different place after a scale change, drifting the window. The screen coordinate space that
 /// Win32 uses is already physical, so nothing has to be converted on the way in or out.
 /// <para>
-/// The window's <i>size</i> is deliberately not stored: it is derived from the card's design size
-/// in DIPs times the current monitor scale, so the widget keeps its apparent size when it is
-/// dragged onto the other monitor instead of being frozen at whatever scale it was last saved at.
+/// This type is only the <i>position</i> half of the card's placement; the size half lives in
+/// <see cref="WidgetSize"/> and is in DIPs for the opposite reason. See
+/// <see cref="WidgetPlacement"/> for both together.
 /// </para>
 /// </remarks>
-public readonly record struct WidgetPosition(int X, int Y)
-{
-    /// <summary>Margin from the virtual screen's top-left on first run (no saved file yet).</summary>
-    public const int FirstRunMargin = 80;
-
-    /// <summary>First-run spot: the top-left of the virtual screen, inset a little.</summary>
-    public static WidgetPosition FirstRun(ScreenRect virtualScreen) =>
-        new(virtualScreen.X + FirstRunMargin, virtualScreen.Y + FirstRunMargin);
-}
+public readonly record struct WidgetPosition(int X, int Y);

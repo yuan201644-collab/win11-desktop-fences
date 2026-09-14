@@ -44,6 +44,16 @@ public sealed record MediaSessionInfo
     public TimeSpan Duration { get; init; }
 
     /// <summary>
+    /// Whether the player published a timeline at all.
+    /// </summary>
+    /// <remarks>
+    /// Kept separate from "duration is non-zero" because the two mean different things: a player can
+    /// report a position with no length, and a player that answered nothing at all must not be read as
+    /// "the track is at 0:00", which would drag the lyrics back to the first line.
+    /// </remarks>
+    public bool HasTimeline { get; init; }
+
+    /// <summary>
     /// When the player last touched its timeline. The only recency signal SMTC offers, and what
     /// breaks ties between two sessions that are both playing.
     /// </summary>
