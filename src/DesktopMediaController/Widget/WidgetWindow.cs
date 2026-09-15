@@ -714,9 +714,17 @@ internal sealed class WidgetWindow
         _cardHidden = false;
         WidgetNative.SetVisible(_hwnd, true);
 
-        _pollTimer.Stop();
-        _pollTimer.Interval = PollInterval;
-        _pollTimer.Start();
+        // Only a timer running at the slow music-watch rate is taken down and restarted, because the
+        // music coming back reaches here from inside the poll's own tick: restarting that timer while
+        // it is dispatching is the one thing this path could get wrong, and there is no reason to do it
+        // when the interval is already correct.
+        if (_pollTimer.Interval != PollInterval)
+        {
+            _pollTimer.Stop();
+            _pollTimer.Interval = PollInterval;
+            _pollTimer.Start();
+        }
+
         _lyricTimer.Start();
         _deviceTimer.Start();
     }
