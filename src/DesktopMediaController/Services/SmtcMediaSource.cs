@@ -29,7 +29,7 @@ namespace DesktopMediaController.Services;
 /// </remarks>
 internal sealed class SmtcMediaSource : IDisposable
 {
-    private readonly SessionPicker _picker = new();
+    private readonly SessionPicker _picker;
     private readonly SemaphoreSlim _oneRefreshAtATime = new(1, 1);
     private readonly object _snapshotGate = new();
 
@@ -44,6 +44,14 @@ internal sealed class SmtcMediaSource : IDisposable
     private BitmapImage? _cover;
 
     private bool _disposed;
+
+    /// <summary>
+    /// Creates the source. <paramref name="filter"/> decides which players the automatic choice is
+    /// allowed to land on; every call that resolves a session goes through the single picker built
+    /// here, so the automatic choice, the transport buttons and manual cycling can never disagree
+    /// about which session is current — or about what a returned index means.
+    /// </summary>
+    public SmtcMediaSource(MediaSourceFilter? filter = null) => _picker = new SessionPicker(filter);
 
     /// <summary>The most recent reading. Cheap and thread-safe; the UI calls this on every repaint.</summary>
     public MediaSnapshot Snapshot

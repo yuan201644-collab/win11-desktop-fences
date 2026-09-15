@@ -79,7 +79,13 @@ internal sealed class WidgetWindow
     private readonly HwndSource _source;
     private readonly WidgetCard _card;
     private readonly IntPtr _hwnd;
-    private readonly SmtcMediaSource _media = new();
+
+    /// <summary>
+    /// Read from <c>sources.json</c> once, at startup — the file has no watcher (see
+    /// <see cref="SourceFilterStore"/>), so editing the list takes effect on the next launch.
+    /// </summary>
+    private readonly SmtcMediaSource _media =
+        new(SourceFilterStore.LoadOrCreate(SourceFilterStore.DefaultFilePath));
     private readonly LyricsService _lyrics = new();
     private readonly PlaybackClock _clock = new();
     private readonly DispatcherTimer _pollTimer;

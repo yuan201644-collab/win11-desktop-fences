@@ -15,10 +15,29 @@ namespace DesktopMediaController.Core;
 /// of them ticked its position forward — visibly flapping cover art and transport buttons. So a
 /// chosen session is held for as long as it stays usable, and re-ranking only happens when it dies.
 /// </para>
+/// <para>
+/// An optional <see cref="MediaSourceFilter"/> narrows what the <i>automatic</i> choice may land on,
+/// and it is applied in exactly one place — <see cref="RankedForAuto"/>. It deliberately does not
+/// apply to the held session or to <see cref="ChooseNext"/>: a player the user reached by hand is held
+/// even when the filter would never have offered it, otherwise cycling to an excluded app would be
+/// undone by the very next poll and the escape hatch would be decorative.
+/// </para>
+/// <para>
+/// Both entry points return indices into the caller's original list and never reorder or compact it.
+/// That is a contract, not a detail: the caller uses the index to reach back into its own parallel
+/// array of live SMTC sessions, so filtering has to drop candidates without moving the survivors.
+/// </para>
 /// </remarks>
 public sealed class SessionPicker
 {
+    private readonly MediaSourceFilter? _filter;
     private string? _sticky;
+
+    /// <summary>
+    /// Creates a picker. <paramref name="filter"/> <c>null</c> means every usable source is equally
+    /// welcome — the behaviour from before tiers existed, and what callers that do not care pass.
+    /// </summary>
+    public SessionPicker(MediaSourceFilter? filter = null) => _filter = filter;
 
     /// <summary>The session currently being held, if any. Exposed for diagnostics.</summary>
     public string? StickySourceId => _sticky;
@@ -35,6 +54,8 @@ public sealed class SessionPicker
         {
             for (var i = 0; i < sessions.Count; i++)
             {
+                // Not tier-checked on purpose — see the class remarks. This one line is what makes
+                // "manually reachable but never automatic" work instead of snapping back.
                 if (sessions[i].SourceId == _sticky && IsUsable(sessions[i])) return i;
             }
 
@@ -42,7 +63,7 @@ public sealed class SessionPicker
             _sticky = null;
         }
 
-        var ranked = Ranked(sessions);
+        var ranked = RankedForAuto(sessions);
         if (ranked.Count == 0) return null;
 
         var winner = ranked[0];
@@ -55,6 +76,10 @@ public sealed class SessionPicker
     /// hatch for the case the automatic policy cannot solve: two players the user cares about, both
     /// playing, where only the user knows which one they want to see.
     /// </summary>
+    /// <remarks>
+    /// Ranks <b>every</b> usable session, tiers ignored, so this is also how a source the filter
+    /// excludes (<see cref="SourceTier.Excluded"/>) is reached by hand.
+    /// </remarks>
     public int? ChooseNext(IReadOnlyList<MediaSessionInfo> sessions)
     {
         ArgumentNullException.ThrowIfNull(sessions);
@@ -107,6 +132,39 @@ public sealed class SessionPicker
             .ThenByDescending(i => sessions[i].LastUpdated)
             .ThenBy(i => i)
             .ToList();
+
+    /// <summary>
+    /// Usable sessions the automatic choice may land on, best first, as indices into the original list.
+    /// </summary>
+    /// <remarks>
+    /// Tier comes <b>before</b> playback status, which is the whole point of the filter: with a browser
+    /// and a player both playing, status alone would tie and hand the card to whichever ticked its
+    /// clock last. The consequence to accept is that a paused player still outranks a playing browser —
+    /// right for a music controller, and rarely visible anyway because stickiness keeps the player on
+    /// screen through a pause rather than letting the browser take over mid-song.
+    /// </remarks>
+    private List<int> RankedForAuto(IReadOnlyList<MediaSessionInfo> sessions) =>
+        Enumerable.Range(0, sessions.Count)
+            .Where(i => IsUsable(sessions[i]) && IsAutoEligible(sessions[i]))
+            .OrderByDescending(i => TierRank(TierOf(sessions[i])))
+            .ThenByDescending(i => Rank(sessions[i].Status))
+            .ThenByDescending(i => sessions[i].LastUpdated)
+            .ThenBy(i => i)
+            .ToList();
+
+    /// <summary>The source's tier under the filter; everything is <see cref="SourceTier.Preferred"/> when there is no filter.</summary>
+    private SourceTier TierOf(MediaSessionInfo session) =>
+        _filter?.TierOf(session.SourceId) ?? SourceTier.Preferred;
+
+    private bool IsAutoEligible(MediaSessionInfo session) =>
+        _filter?.IsAutoEligible(session.SourceId) ?? true;
+
+    private static int TierRank(SourceTier tier) => tier switch
+    {
+        SourceTier.Preferred => 1,
+        SourceTier.Fallback => 0,
+        _ => -1,
+    };
 
     private static int Rank(MediaPlaybackStatus status) => status switch
     {
