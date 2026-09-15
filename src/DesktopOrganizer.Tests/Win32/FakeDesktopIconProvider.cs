@@ -9,6 +9,12 @@ public sealed class FakeDesktopIconProvider : IDesktopIconProvider
     private readonly Dictionary<int, PointI> _pos = new();
     public IntPtr Handle => IntPtr.Zero;
     public bool IsAvailable { get; set; } = true;
+
+    // Test control for the "icons hidden" seam: flipping this to false emulates the user unchecking
+    // 查看 → 显示桌面图标 (Explorer hides the listview, the window survives). A test flips it after
+    // arranging and asserts the next refresh hides the overlay mesh — and flips it back to assert
+    // the mesh returns WITHOUT a re-arrange.
+    public bool AreDesktopIconsVisible { get; set; } = true;
     public int IconSpacingX { get; set; } = 96;
     public int IconSpacingY { get; set; } = 96;
     public List<DesktopIcon> Icons { get; } = new();

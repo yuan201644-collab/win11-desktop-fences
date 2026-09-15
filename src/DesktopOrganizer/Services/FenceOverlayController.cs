@@ -37,6 +37,9 @@ public sealed class FenceOverlayController : IDisposable
     private readonly IOverlayHost _host;
     private readonly Func<DesktopIcon, string>? _titleResolver;
     private readonly Func<RectI?>? _screenProvider;
+    // Foreground-window seam (tests inject a fake HWND so the WS_EX_APPWINDOW verdict is
+    // deterministic headlessly; production uses GetForegroundWindow directly).
+    private readonly Func<IntPtr>? _foregroundWindowProvider;
     private readonly string? _collapseFilePath;
     private readonly string? _layoutFilePath;
     private readonly string? _colorFilePath;
@@ -148,10 +151,12 @@ public sealed class FenceOverlayController : IDisposable
         string? boxInsetFilePath = null,
         string? fenceInsetFilePath = null,
         string? desktopLayoutFilePath = null,
-        string? liveSortFilePath = null)
+        string? liveSortFilePath = null,
+        Func<IntPtr>? foregroundWindowProvider = null)
     {
         _titleResolver = titleResolver;
         _screenProvider = screenProvider;
+        _foregroundWindowProvider = foregroundWindowProvider;
         _collapseFilePath = collapseFilePath;
         _layoutFilePath = layoutFilePath;
         _colorFilePath = colorFilePath;
@@ -705,13 +710,22 @@ public sealed class FenceOverlayController : IDisposable
     }
 
     /// <summary>
-    /// Fences are only shown while the desktop itself (or this app's own settings window) is
-    /// foreground; when a real app takes the foreground the fences hide so they never float over it,
-    /// and they return the instant the user comes back to the desktop.
+    /// Fences are only shown while (a) the desktop is actually DRAWING its icons — the user's
+    /// 查看 → 显示桌面图标 switch makes Explorer hide the listview itself, and since the fences are
+    /// independent top-level windows they would otherwise keep floating as empty frames over an
+    /// empty desktop — and (b) the desktop itself (or this app's own settings window) is foreground;
+    /// when a real app takes the foreground the fences hide so they never float over it, and they
+    /// return the instant the user comes back to the desktop.
     /// </summary>
-    private static bool ShouldShowFences()
+    private bool ShouldShowFences()
     {
-        var fg = NativeMethods.GetForegroundWindow();
+        // Checked FIRST so it wins even when the foreground belongs to explorer: a hidden listview
+        // means there is nothing for the fences to frame, no matter who owns the foreground window.
+        // This deliberately does NOT short-circuit the refresh tick — a hidden listview's icon data
+        // stays fully readable (IsAvailable only asks IsWindow, not IsWindowVisible), so arranging,
+        // LiveSort and rescue keep running; only the drawing is suppressed.
+        if (!_provider.AreDesktopIconsVisible) return false;
+        var fg = _foregroundWindowProvider is { } f ? f() : NativeMethods.GetForegroundWindow();
         if (fg == IntPtr.Zero) return true;
         NativeMethods.GetWindowThreadProcessId(fg, out var pid);
         if (pid == Environment.ProcessId) return true; // our own settings window — keep boxes visible after "整理"

@@ -7,6 +7,14 @@ public interface IDesktopIconProvider : IDisposable
 {
     IntPtr Handle { get; }
     bool IsAvailable { get; }
+
+    /// <summary>True while the desktop's icons are actually shown. This is NOT the same as
+    /// <see cref="IsAvailable"/> (which only asks whether the listview window exists): the user can
+    /// hide every desktop icon via the desktop context menu (查看 → 显示桌面图标) and Explorer
+    /// responds by hiding the listview itself — the window stays alive, icon data stays readable,
+    /// but nothing is drawn. The fence overlay is a set of independent top-level windows, so
+    /// without consulting this it would keep floating as empty frames over an empty desktop.</summary>
+    bool AreDesktopIconsVisible { get; }
     int Count { get; }
     int IconSpacingX { get; }
     int IconSpacingY { get; }

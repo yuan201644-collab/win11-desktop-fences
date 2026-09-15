@@ -112,6 +112,18 @@ public sealed class SysListView32Provider : IDesktopIconProvider, IDisposable
     /// window forever.
     /// </summary>
     public bool IsAvailable => _available && NativeMethods.IsWindow(_hwnd);
+
+    /// <summary>
+    /// Whether the desktop is currently DRAWING its icons. The user's 查看 → 显示桌面图标 toggle
+    /// makes Explorer hide the listview window without destroying it, so this differs from
+    /// <see cref="IsAvailable"/> exactly when that switch is off. IsWindowVisible walks up the
+    /// ancestor chain, so a hidden Progman/DefView ancestor also reads as "not visible" — which is
+    /// the correct ground truth for "is anything of the desktop showing". A hidden listview's
+    /// icon data stays fully readable, so arranging/LiveSort keep working; only the drawing state
+    /// changes.
+    /// </summary>
+    public bool AreDesktopIconsVisible => _available && NativeMethods.IsWindowVisible(_hwnd);
+
     public int IconSpacingX => Spacing(1);
     public int IconSpacingY => Spacing(0);
 

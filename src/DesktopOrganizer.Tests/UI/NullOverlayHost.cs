@@ -39,7 +39,19 @@ public sealed class NullOverlayHost : IOverlayHost
     /// geometry the controller actually drew (per-box insets reshape these bounds).</summary>
     public IReadOnlyList<FenceCluster> LastClusters { get; private set; } = Array.Empty<FenceCluster>();
 
-    public void SetVisible(bool visible) { }
+    /// <summary>The value from the most recent <see cref="SetVisible"/> call (false before the
+    /// first call), so tests can assert the controller's show/hide verdict without a real window.</summary>
+    public bool Visible { get; private set; }
+
+    /// <summary>How many times <see cref="SetVisible"/> was called — lets a test prove the
+    /// controller did NOT spam redundant show/hide requests.</summary>
+    public int SetVisibleCalls { get; private set; }
+
+    public void SetVisible(bool visible)
+    {
+        Visible = visible;
+        SetVisibleCalls++;
+    }
 
     public void Sync(IReadOnlyList<FenceCluster> clusters, int headerPx, IReadOnlyCollection<string>? pinnedTitles = null,
         IReadOnlyCollection<string>? lockedTitles = null)

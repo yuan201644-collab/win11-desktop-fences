@@ -26,6 +26,13 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern bool IsWindow(IntPtr hWnd);
 
+    // Unlike IsWindow, this reports the *effective* visibility: false when the window itself or ANY
+    // ancestor is hidden. The desktop "显示桌面图标" toggle works exactly this way — Explorer calls
+    // ShowWindow(SW_HIDE) on the SysListView32 while the window object stays alive, so IsWindow
+    // keeps returning true and only this call reflects the user's switch.
+    [DllImport("user32.dll")]
+    internal static extern bool IsWindowVisible(IntPtr hWnd);
+
     [DllImport("user32.dll")]
     internal static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
