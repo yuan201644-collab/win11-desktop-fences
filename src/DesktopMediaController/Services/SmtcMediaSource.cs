@@ -45,6 +45,9 @@ internal sealed class SmtcMediaSource : IDisposable
 
     private bool _disposed;
 
+    /// <summary>Whether <see cref="InitializeAsync"/> has finished, successfully or not.</summary>
+    private bool _initializeAttempted;
+
     /// <summary>
     /// Creates the source. <paramref name="filter"/> decides which players the automatic choice is
     /// allowed to land on; every call that resolves a session goes through the single picker built
@@ -74,7 +77,22 @@ internal sealed class SmtcMediaSource : IDisposable
             // Without SMTC the widget can still exist and be dragged; it just has nothing to show.
             CrashLog.Write("smtc-init", ex);
         }
+        finally
+        {
+            // Set even when the request threw: the difference between "has not answered yet" and "will
+            // never answer" is what stops a self-hiding card from concluding that a broken sensor means
+            // the music stopped.
+            _initializeAttempted = true;
+        }
     }
+
+    /// <summary>
+    /// Whether an empty reading can be believed. A snapshot with no session means "nothing is playing"
+    /// only once SMTC has actually answered (see <see cref="MediaAvailability"/>).
+    /// </summary>
+    public MediaAvailability Availability => _manager is not null
+        ? MediaAvailability.Available
+        : _initializeAttempted ? MediaAvailability.Unavailable : MediaAvailability.Starting;
 
     /// <summary>
     /// Re-reads the world and publishes a new <see cref="Snapshot"/>. Single-flight: if a refresh is

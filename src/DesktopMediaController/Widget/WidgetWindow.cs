@@ -76,6 +76,18 @@ internal sealed class WidgetWindow
     /// </remarks>
     private static readonly TimeSpan LyricInterval = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>
+    /// How often the players are read while the card is off screen for want of music.
+    /// </summary>
+    /// <remarks>
+    /// Slower than <see cref="PollInterval"/> because all this tick has to find out is whether music
+    /// came back — nothing is on screen, so a second of latency is invisible. It cannot be stopped
+    /// altogether, which is precisely what <see cref="HideCard"/> does for the other kind of hiding:
+    /// the card that left because the music stopped has to keep one ear open, or "it comes back by
+    /// itself" would be a promise nothing is left to keep.
+    /// </remarks>
+    private static readonly TimeSpan MusicWatchInterval = TimeSpan.FromSeconds(1);
+
     private readonly HwndSource _source;
     private readonly WidgetCard _card;
     private readonly IntPtr _hwnd;
@@ -90,6 +102,12 @@ internal sealed class WidgetWindow
     private readonly PlaybackClock _clock = new();
     private readonly DispatcherTimer _pollTimer;
     private readonly DispatcherTimer _lyricTimer;
+
+    /// <summary>
+    /// Owns the question of whether the card should be on screen, including the difference between a
+    /// card that hid itself and one the user dismissed. The window only carries out its verdict.
+    /// </summary>
+    private readonly CardVisibilityPolicy _visibility;
 
     /// <summary>
     /// How often the default output device is re-read. Slow, because it only feeds a tooltip and the
@@ -172,6 +190,13 @@ internal sealed class WidgetWindow
         // resized again - a 360x112 card inflated to 1906x670 inside one drag.
         _cardHidden = startHidden;
 
+        // A silent launch comes up parked as HiddenAuto rather than HiddenUser: the user did not ask
+        // this card away, the sign-in entry point did, so music starting is allowed to bring it back.
+        // A visible launch counts as the user asking for it, which buys the grace that keeps a
+        // double-clicked shortcut from showing a card for five seconds and then snatching it away.
+        _visibility = new CardVisibilityPolicy(startHidden ? CardPhase.HiddenAuto : CardPhase.Visible);
+        if (!startHidden) _visibility.UserShowed(DateTimeOffset.UtcNow);
+
         _source = new HwndSource(new HwndSourceParameters(WindowTitle)
         {
             // WS_VISIBLE is not implied: HwndSourceParameters builds exactly the style it is given,
@@ -231,9 +256,15 @@ internal sealed class WidgetWindow
         _deviceTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = DeviceInterval };
         _deviceTimer.Tick += OnDeviceTick;
 
-        // A silent start is a card nobody can see, so it does not poll at all - same reasoning as
-        // HideCard. ShowCard starts it again, and refreshes immediately so the first frame is live.
-        if (!startHidden)
+        // A silent start shows nothing, so only the music watch runs — slowly, and it must run: the
+        // card has to be able to notice music starting even though nobody is looking at it. ShowCard
+        // upgrades the rate and lifts the other two timers, and refreshes so the first frame is live.
+        if (startHidden)
+        {
+            _pollTimer.Interval = MusicWatchInterval;
+            _pollTimer.Start();
+        }
+        else
         {
             _pollTimer.Start();
             _lyricTimer.Start();
@@ -266,10 +297,58 @@ internal sealed class WidgetWindow
         {
             BeginTrack(session);
             SyncClock(session);
-            return;
+        }
+        else
+        {
+            ClearTrack();
         }
 
-        ClearTrack();
+        ApplyVisibility(snapshot);
+    }
+
+    /// <summary>
+    /// Asks the policy what should happen to the card and does it. The end of every poll is the single
+    /// place where the card can leave or return on its own, which keeps that decision out of the
+    /// transport buttons and the lyric path.
+    /// </summary>
+    private void ApplyVisibility(MediaSnapshot snapshot)
+    {
+        // A paused player still has a session, and is deliberately counted as music: pausing is not
+        // quitting, and a card that vanished every time the user hit pause would be obnoxious.
+        var action = _visibility.Observe(
+            hasMusic: snapshot.Session is not null,
+            media: _media.Availability,
+            now: DateTimeOffset.UtcNow);
+
+        if (action == CardVisibilityAction.Hide)
+        {
+            HideCardForSilence();
+        }
+        else if (action == CardVisibilityAction.Show)
+        {
+            // No refresh: this tick just read the players, and the card was kept up to date the whole
+            // time it was off screen, so there is nothing stale to fetch.
+            ShowCardCore();
+        }
+    }
+
+    /// <summary>
+    /// Takes the card off screen because nothing is playing. Not the same thing as
+    /// <see cref="HideCard"/>, and the difference is the whole feature: this one keeps a slow music
+    /// watch running so the card can bring itself back, where the user's hide stops everything.
+    /// </summary>
+    private void HideCardForSilence()
+    {
+        _cardHidden = true;
+        WidgetNative.SetVisible(_hwnd, false);
+
+        // Nothing on screen means no lyric clock to step and no device tooltip to refresh; the poll
+        // survives at a slower rate because it is the only thing that can notice music returning.
+        _lyricTimer.Stop();
+        _deviceTimer.Stop();
+        _pollTimer.Stop();
+        _pollTimer.Interval = MusicWatchInterval;
+        _pollTimer.Start();
     }
 
     // ---- lyrics -------------------------------------------------------------------------------
@@ -611,17 +690,35 @@ internal sealed class WidgetWindow
     public event EventHandler? ExitRequested;
 
     /// <summary>Puts the card back on screen without activating it, and resumes live updates.</summary>
+    /// <remarks>
+    /// This is the user asking — the tray, the shortcut, or a second launch — so it goes through
+    /// <see cref="CardVisibilityPolicy.UserShowed"/> and buys the grace that keeps the card from
+    /// disappearing again seconds later on a quiet desktop.
+    /// </remarks>
     public void ShowCard()
+    {
+        _visibility.UserShowed(DateTimeOffset.UtcNow);
+        ShowCardCore();
+
+        // Polling is suspended while hidden, so without this the card would reappear still showing
+        // whatever was playing when it was dismissed.
+        _ = RefreshAndApplyAsync();
+    }
+
+    /// <summary>
+    /// The mechanical half of showing the card: window visible, timers back at their normal rate.
+    /// Split out so the music coming back can use it without claiming the user asked for anything.
+    /// </summary>
+    private void ShowCardCore()
     {
         _cardHidden = false;
         WidgetNative.SetVisible(_hwnd, true);
 
-        // Polling is suspended while hidden, so without this the card would reappear still showing
-        // whatever was playing when it was dismissed.
+        _pollTimer.Stop();
+        _pollTimer.Interval = PollInterval;
         _pollTimer.Start();
         _lyricTimer.Start();
         _deviceTimer.Start();
-        _ = RefreshAndApplyAsync();
     }
 
     /// <summary>
@@ -629,8 +726,15 @@ internal sealed class WidgetWindow
     /// entire difference between hiding and closing. The window handle survives, so a later launch can
     /// still find this instance, and the packer correctly stops reserving desktop space for it.
     /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="HideCardForSilence"/>, everything stops here: the user asked for the card to
+    /// go away, so nothing should be watching for a reason to put it back. Their intent is remembered,
+    /// which is also what stops music from re-opening it behind their back.
+    /// </remarks>
     public void HideCard()
     {
+        _visibility.UserHid();
+
         _cardHidden = true;
         WidgetNative.SetVisible(_hwnd, false);
 
@@ -638,6 +742,7 @@ internal sealed class WidgetWindow
         // second or stepping the lyric clock twenty times a second. The session itself stays open:
         // showing it again is instant.
         _pollTimer.Stop();
+        _pollTimer.Interval = PollInterval;
         _lyricTimer.Stop();
         _deviceTimer.Stop();
     }
